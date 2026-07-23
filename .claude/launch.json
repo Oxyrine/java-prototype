@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "blueprint-web",
+      "runtimeExecutable": "py",
+      "runtimeArgs": ["-m", "http.server", "8000", "--directory", "web"],
+      "port": 8000
+    }
+  ]
+}

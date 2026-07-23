@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Blueprint Explorer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font-family: sans-serif; }
+  canvas { display: block; }
+
+  #crosshair {
+    position: fixed; top: 50%; left: 50%;
+    width: 6px; height: 6px; margin: -3px 0 0 -3px;
+    border-radius: 50%; background: rgba(255,255,255,0.8);
+    pointer-events: none;
+  }
+
+  #overlay {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.6); color: #fff; text-align: center;
+    cursor: pointer;
+  }
+  #overlay.hidden { display: none; }
+  #overlay h1 { margin: 0 0 8px; }
+  #overlay p { margin: 4px 0; opacity: 0.85; }
+</style>
+</head>
+<body>
+
+<div id="overlay">
+  <div>
+    <h1>Blueprint Explorer</h1>
+    <p>Click to start</p>
+    <p>WASD to move &middot; Mouse to look &middot; Esc to release</p>
+  </div>
+</div>
+<div id="crosshair"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="main.js"></script>
+
+</body>
+</html>
