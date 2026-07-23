@@ -16,22 +16,73 @@
 
   #overlay {
     position: fixed; inset: 0;
-    display: flex; align-items: center; justify-content: center;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px;
     background: rgba(0,0,0,0.6); color: #fff; text-align: center;
-    cursor: pointer;
   }
   #overlay.hidden { display: none; }
-  #overlay h1 { margin: 0 0 8px; }
-  #overlay p { margin: 4px 0; opacity: 0.85; }
+  #startPrompt { cursor: pointer; }
+  #startPrompt h1 { margin: 0 0 8px; }
+  #startPrompt p { margin: 4px 0; opacity: 0.85; }
+
+  #uploadPanel {
+    background: rgba(20,20,25,0.9); border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px; padding: 18px 22px; width: 300px;
+    font-size: 14px; cursor: default;
+  }
+  #uploadPanel h2 { margin: 0 0 12px; font-size: 19px; opacity: 0.9; }
+  #uploadPanel label {
+    display: block; text-align: left; margin: 10px 0 4px; opacity: 0.85;
+  }
+  #uploadPanel input[type="file"],
+  #uploadPanel input[type="number"] {
+    width: 100%; box-sizing: border-box; padding: 5px; font-size: 13px;
+  }
+  #uploadPanel button {
+    width: 100%; margin-top: 12px; padding: 8px; font-size: 14px;
+    cursor: pointer; border: none; border-radius: 5px;
+    background: #4a7fd6; color: #fff;
+  }
+  #uploadPanel button:disabled { opacity: 0.5; cursor: default; }
+  #uploadStatus { min-height: 18px; margin: 10px 0 0; font-size: 13px; }
+  #uploadStatus.error { color: #ff8a8a; }
+  #uploadStatus.ok { color: #8aff9e; }
+
+  #sensitivityRow {
+    display: flex; align-items: center; gap: 8px; margin-top: 16px;
+    padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.15);
+  }
+  #sensitivityRow input[type="range"] { flex: 1; }
+  #sensitivityValue { width: 32px; text-align: right; opacity: 0.85; }
 </style>
 </head>
 <body>
 
 <div id="overlay">
-  <div>
+  <div id="startPrompt">
     <h1>Blueprint Explorer</h1>
     <p>Click to start</p>
     <p>WASD to move &middot; Mouse to look &middot; Esc to release</p>
+  </div>
+
+  <div id="uploadPanel">
+    <h2>Load a blueprint image</h2>
+    <form id="uploadForm">
+      <label for="blueprintFile">Floor plan (PNG/JPG/PDF) &mdash; top-down view, not a section</label>
+      <input type="file" id="blueprintFile" name="image" accept="image/png,image/jpeg,.pdf" required />
+
+      <label for="widthMetres">Building width (metres)</label>
+      <input type="number" id="widthMetres" name="widthMetres" value="12" min="1" step="0.5" />
+
+      <button type="submit" id="uploadButton">Upload &amp; Build</button>
+    </form>
+    <p id="uploadStatus"></p>
+
+    <div id="sensitivityRow">
+      <label for="sensitivitySlider" style="margin:0; white-space:nowrap;">Mouse sensitivity</label>
+      <input type="range" id="sensitivitySlider" min="0.05" max="1" step="0.05" value="0.3" />
+      <span id="sensitivityValue">0.30</span>
+    </div>
   </div>
 </div>
 <div id="crosshair"></div>

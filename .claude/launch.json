@@ -4,7 +4,7 @@
     {
       "name": "blueprint-web",
       "runtimeExecutable": "py",
-      "runtimeArgs": ["-m", "http.server", "8000", "--directory", "web"],
+      "runtimeArgs": ["server.py"],
       "port": 8000
     }
   ]
