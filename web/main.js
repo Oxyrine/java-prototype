@@ -78,9 +78,16 @@ uploadForm.addEventListener('submit', async (e) => {
       throw new Error(data.error || `Server returned HTTP ${res.status}`);
     }
 
-    uploadStatus.className = 'ok';
-    uploadStatus.textContent = 'Level built! Reloading…';
-    setTimeout(() => window.location.reload(), 600);
+    const pct = Math.round(data.reachableFraction * 100);
+    if (data.warning) {
+      uploadStatus.className = 'warn';
+      uploadStatus.textContent = `${data.wallCount} walls, only ${pct}% of floor reachable. ${data.warning} Reloading…`;
+      setTimeout(() => window.location.reload(), 4000);
+    } else {
+      uploadStatus.className = 'ok';
+      uploadStatus.textContent = `Level built! ${data.wallCount} walls, ${pct}% of floor reachable. Reloading…`;
+      setTimeout(() => window.location.reload(), 1200);
+    }
   } catch (err) {
     uploadStatus.className = 'error';
     uploadStatus.textContent = String(err.message || err);

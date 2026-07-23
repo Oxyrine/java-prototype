@@ -4,7 +4,7 @@
     {
       "name": "blueprint-web",
       "runtimeExecutable": "py",
-      "runtimeArgs": ["server.py"],
+      "runtimeArgs": ["-u", "server.py"],
       "port": 8000
     }
   ]

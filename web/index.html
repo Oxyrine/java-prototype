@@ -47,6 +47,13 @@
   #uploadStatus { min-height: 18px; margin: 10px 0 0; font-size: 13px; }
   #uploadStatus.error { color: #ff8a8a; }
   #uploadStatus.ok { color: #8aff9e; }
+  #uploadStatus.warn { color: #ffd27a; }
+
+  #skipClosingLabel {
+    display: flex; align-items: flex-start; gap: 6px;
+    font-size: 12px; line-height: 1.3;
+  }
+  #skipClosingLabel input { margin-top: 2px; flex-shrink: 0; }
 
   #sensitivityRow {
     display: flex; align-items: center; gap: 8px; margin-top: 16px;
@@ -73,6 +80,11 @@
 
       <label for="widthMetres">Building width (metres)</label>
       <input type="number" id="widthMetres" name="widthMetres" value="12" min="1" step="0.5" />
+
+      <label id="skipClosingLabel">
+        <input type="checkbox" id="skipClosing" name="skipClosing" value="true" />
+        Skip wall-closing (retry this if some rooms come out sealed off)
+      </label>
 
       <button type="submit" id="uploadButton">Upload &amp; Build</button>
     </form>

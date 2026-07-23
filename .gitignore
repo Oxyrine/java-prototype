@@ -11,3 +11,7 @@ __pycache__/
 # real project assets, per the plan's "text grid is the escape hatch" design.
 blueprints/*.overlay.png
 blueprints/sample_plan.png
+
+# Whatever a user uploads through the web menu -- may be a real, private floor plan.
+# Never committed, regardless of file extension.
+blueprints/uploaded.*

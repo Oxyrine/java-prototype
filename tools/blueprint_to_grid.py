@@ -408,7 +408,7 @@ def convert(image_path: Path, out_name: str, cols: int, fill: float, width_metre
     print(f"Wrote {out_txt}")
     print(f"Wrote {out_overlay}  (walls tinted red, spawn marked green -- inspect this)")
 
-    return out_txt, cell_size, wall_height
+    return out_txt, cell_size, wall_height, reachable_fraction, wall_count
 
 
 def main():

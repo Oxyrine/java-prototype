@@ -69,15 +69,21 @@ def convert():
     except ValueError:
         return jsonify(success=False, error="Building width must be a positive number."), 400
 
+    # Door swing-arc symbols and thin double-line walls both draw as real ink, and
+    # whether that ink should be bridged (do_close=True) or left alone depends on the
+    # source drawing -- there's no setting that's right for every image. Let the user
+    # retry from the same form instead of needing the CLI when a doorway comes out sealed.
+    skip_closing = request.form.get("skipClosing") == "true"
+
     BLUEPRINTS_DIR.mkdir(parents=True, exist_ok=True)
     upload_path = BLUEPRINTS_DIR / f"uploaded{suffix}"
     file.save(upload_path)
 
     try:
-        out_txt, cell_size, wall_height = blueprint_to_grid.convert(
+        out_txt, cell_size, wall_height, reachable_fraction, wall_count = blueprint_to_grid.convert(
             image_path=upload_path, out_name="uploaded", cols=96, fill=0.12,
             width_metres=width_metres, wall_height=2.5, dpi=200, invert=False,
-            do_close=True, min_region=6, do_seal=True, keep_largest_only=True)
+            do_close=not skip_closing, min_region=6, do_seal=True, keep_largest_only=True)
     except Exception as e:
         return jsonify(success=False, error=f"Image conversion failed: {e}"), 400
 
@@ -87,7 +93,15 @@ def convert():
     except SystemExit as e:
         return jsonify(success=False, error=f"Level build failed: {e}"), 500
 
-    return jsonify(success=True)
+    warning = None
+    if reachable_fraction < 0.8:
+        warning = (f"Only {reachable_fraction * 100:.0f}% of the floor is reachable from spawn -- "
+                    "one or more doorways likely got sealed (often a door swing-arc symbol "
+                    "bridging the gap). Try the \"skip wall-closing\" option, or check "
+                    f"blueprints/uploaded.overlay.png to see exactly which walls were detected.")
+
+    return jsonify(success=True, wallCount=wall_count,
+                    reachableFraction=round(reachable_fraction, 3), warning=warning)
 
 
 if __name__ == "__main__":

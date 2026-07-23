@@ -97,7 +97,7 @@ def main():
     args = parser.parse_args()
 
     print("=== Stage 1: image -> grid (Python) ===")
-    out_txt, cell_size, wall_height = blueprint_to_grid.convert(
+    out_txt, cell_size, wall_height, _reachable, _walls = blueprint_to_grid.convert(
         args.image, args.out, args.cols, args.fill, args.width_metres,
         args.wall_height, args.dpi, args.invert, args.do_close, args.min_region,
         args.do_seal, args.keep_largest_only)
