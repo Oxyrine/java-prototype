@@ -55,6 +55,46 @@ overlay.addEventListener('click', () => controls.lock());
 controls.addEventListener('lock', () => overlay.classList.add('hidden'));
 controls.addEventListener('unlock', () => overlay.classList.remove('hidden'));
 
+// ---------- mouse-move diagnostic (separate listener, doesn't touch PointerLockControls'
+// own handling) -- logs the raw input PointerLockControls itself is reacting to, so we can
+// tell "input itself arrives in big rare jumps" (OS/browser/hardware) apart from
+// "input is fine but something downstream eats it" (a real bug in our code) ----------
+const mouseMoveLog = document.getElementById('mouseMoveLog');
+let mmCount = 0, mmWindowStart = performance.now(), mmLastT = null, mmMaxGap = 0, mmLastDx = 0, mmLastDy = 0, mmMaxAbsDelta = 0;
+document.addEventListener('mousemove', (e) => {
+  if (!controls.isLocked) return;
+  const t = performance.now();
+  if (mmLastT !== null) {
+    const gap = t - mmLastT;
+    if (gap > mmMaxGap) mmMaxGap = gap;
+    if (gap > 100) {
+      // A gap this large between consecutive mousemove events, while locked, is the
+      // exact signature of "input itself stalled" -- log it plainly so it's easy to spot.
+      console.log(`MOUSEMOVE GAP: ${gap.toFixed(0)}ms since last event (dx=${e.movementX}, dy=${e.movementY})`);
+    }
+  }
+  mmLastT = t;
+  mmLastDx = e.movementX;
+  mmLastDy = e.movementY;
+  const absDelta = Math.max(Math.abs(e.movementX), Math.abs(e.movementY));
+  if (absDelta > mmMaxAbsDelta) mmMaxAbsDelta = absDelta;
+  mmCount++;
+});
+
+setInterval(() => {
+  const now = performance.now();
+  const elapsed = (now - mmWindowStart) / 1000;
+  const rate = elapsed > 0 ? Math.round(mmCount / elapsed) : 0;
+  if (mouseMoveLog) {
+    mouseMoveLog.textContent =
+      `${rate} moves/s  maxGap ${mmMaxGap.toFixed(0)}ms  last dx,dy ${mmLastDx},${mmLastDy}  maxDelta ${mmMaxAbsDelta}`;
+  }
+  mmCount = 0;
+  mmWindowStart = now;
+  mmMaxGap = 0;
+  mmMaxAbsDelta = 0;
+}, 1000);
+
 // ---------- sensitivity slider ----------
 const sensitivitySlider = document.getElementById('sensitivitySlider');
 const sensitivityValue = document.getElementById('sensitivityValue');
