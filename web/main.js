@@ -55,14 +55,33 @@ overlay.addEventListener('click', () => controls.lock());
 controls.addEventListener('lock', () => overlay.classList.add('hidden'));
 controls.addEventListener('unlock', () => overlay.classList.remove('hidden'));
 
-// ---------- mouse-move diagnostic (separate listener, doesn't touch PointerLockControls'
-// own handling) -- logs the raw input PointerLockControls itself is reacting to, so we can
-// tell "input itself arrives in big rare jumps" (OS/browser/hardware) apart from
-// "input is fine but something downstream eats it" (a real bug in our code) ----------
+// ---------- mouse-look: smoothed, replacing PointerLockControls' raw instant rotation ----------
+// Diagnostic data (see below) showed input itself arrives smoothly and often (~140/s, no real
+// gaps) but with occasional huge single-event deltas -- a fast mouse flick, completely normal
+// human mouse use. PointerLockControls applies every event's rotation instantly and unsmoothed
+// (see its source: euler.y -= movementX * 0.002 * pointerSpeed, applied straight to the camera
+// quaternion in its own 'mousemove' listener), so one big-delta event alone snaps the view in a
+// single frame. Movement already smooths velocity via DAMPING; rotation had nothing equivalent.
+// Fix: track a target yaw/pitch using PointerLockControls' own formula (0.002 * pointerSpeed,
+// so overall sensitivity feel is unchanged), then smooth the camera's ACTUAL orientation toward
+// that target every frame in the animate loop instead of snapping straight to it.
+// PointerLockControls still runs its own listener and sets the camera quaternion instantly and
+// directly, same as before -- animate() below just overwrites that with the smoothed value
+// every frame, before the frame renders, so its raw/instant result never becomes visible.
+const ROTATION_SMOOTHING_RATE = 30; // 1/s -- higher = snappier, lower = smoother but laggier
+const PITCH_LIMIT = Math.PI / 2 - 0.001;
+let targetYaw = 0, targetPitch = 0, currentYaw = 0, currentPitch = 0;
+const lookEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+
 const mouseMoveLog = document.getElementById('mouseMoveLog');
 let mmCount = 0, mmWindowStart = performance.now(), mmLastT = null, mmMaxGap = 0, mmLastDx = 0, mmLastDy = 0, mmMaxAbsDelta = 0;
 document.addEventListener('mousemove', (e) => {
   if (!controls.isLocked) return;
+
+  targetYaw -= e.movementX * 0.002 * controls.pointerSpeed;
+  targetPitch -= e.movementY * 0.002 * controls.pointerSpeed;
+  targetPitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, targetPitch));
+
   const t = performance.now();
   if (mmLastT !== null) {
     const gap = t - mmLastT;
@@ -312,6 +331,16 @@ function animate() {
   }
 
   if (controls.isLocked && level) {
+    // Smooth the camera's actual orientation toward the raw mouse target instead of
+    // snapping straight to it -- see the mousemove listener above for why. Overwrites
+    // whatever PointerLockControls' own listener already set on camera.quaternion this
+    // frame; must run before getDirection() so movement uses the up-to-date orientation.
+    const rotationSmoothing = 1 - Math.exp(-ROTATION_SMOOTHING_RATE * delta);
+    currentYaw += (targetYaw - currentYaw) * rotationSmoothing;
+    currentPitch += (targetPitch - currentPitch) * rotationSmoothing;
+    lookEuler.set(currentPitch, currentYaw, 0);
+    camera.quaternion.setFromEuler(lookEuler);
+
     // Exponential damping so the player coasts to a stop instead of snapping.
     velocity.x -= velocity.x * DAMPING * delta;
     velocity.z -= velocity.z * DAMPING * delta;
