@@ -39,8 +39,10 @@ const storedSensitivity = parseFloat(localStorage.getItem('pointerSensitivity'))
 controls.pointerSpeed = Number.isFinite(storedSensitivity) ? storedSensitivity : DEFAULT_POINTER_SPEED;
 
 const overlay = document.getElementById('overlay');
-const startPrompt = document.getElementById('startPrompt');
-startPrompt.addEventListener('click', () => controls.lock());
+// The whole dark backdrop is clickable to start, not just the "Click to start" text --
+// visually the entire overlay reads as one clickable surface, so a listener scoped to
+// just the text block was an easy-to-hit dead zone everywhere else on screen.
+overlay.addEventListener('click', () => controls.lock());
 controls.addEventListener('lock', () => overlay.classList.add('hidden'));
 controls.addEventListener('unlock', () => overlay.classList.remove('hidden'));
 
@@ -57,11 +59,15 @@ sensitivitySlider.addEventListener('input', () => {
 });
 
 // ---------- upload form ----------
+const uploadPanel = document.getElementById('uploadPanel');
 const uploadForm = document.getElementById('uploadForm');
 const uploadButton = document.getElementById('uploadButton');
 const uploadStatus = document.getElementById('uploadStatus');
 
-uploadForm.addEventListener('click', (e) => e.stopPropagation()); // don't let clicks fall through to controls.lock()
+// Now that the whole overlay is clickable to start, the whole panel (not just the form)
+// needs to stop that click from bubbling up -- otherwise clicking its title, status text,
+// or the sensitivity row's padding would accidentally engage pointer lock mid-interaction.
+uploadPanel.addEventListener('click', (e) => e.stopPropagation());
 
 uploadForm.addEventListener('submit', async (e) => {
   e.preventDefault();
