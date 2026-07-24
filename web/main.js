@@ -17,9 +17,13 @@ scene.fog = new THREE.Fog(0x8fb8de, 3, 18); // pulled in from Phase 1's 8/40 -- 
 // which is exactly where two coincident surfaces (see the floor y-offset below) need it most.
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
 
-// logarithmicDepthBuffer trades a little precision at the far plane (irrelevant here) for
-// far better precision near the camera -- the standard fix for near-camera z-fighting.
-const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+// NOT using logarithmicDepthBuffer: it's a well-documented perf trap specifically with
+// InstancedMesh (our wall rendering) on integrated GPUs -- can tank frame rate badly enough
+// that mouse-look updates (applied instantly, decoupled from the render loop) pile up between
+// rendered frames and the camera appears to "jump" between poses instead of turning smoothly,
+// rather than causing visible flicker. The floor's y-offset below already fixes the actual
+// z-fighting (floor exactly coplanar with every wall's bottom face) without this cost.
+const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 document.body.appendChild(renderer.domElement);
