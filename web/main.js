@@ -12,9 +12,14 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fb8de);
 scene.fog = new THREE.Fog(0x8fb8de, 3, 18); // pulled in from Phase 1's 8/40 -- these are indoor rooms, not an open maze
 
-const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 200);
+// far=100 (was 200): these are single-floor indoor scenes, rarely more than ~20-30m across.
+// A needlessly distant far plane starves the depth buffer's precision near the camera,
+// which is exactly where two coincident surfaces (see the floor y-offset below) need it most.
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// logarithmicDepthBuffer trades a little precision at the far plane (irrelevant here) for
+// far better precision near the camera -- the standard fix for near-camera z-fighting.
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 document.body.appendChild(renderer.domElement);
@@ -179,7 +184,9 @@ function buildLevel(data) {
   // so the plane's center sits half a cell beyond each edge.
   floor.position.set(
     (floorWidth - data.cellSize) / 2,
-    0,
+    -0.01, // nudged just below y=0 -- every wall's bottom face sits exactly at y=0 (see
+           // LevelBuilder.java's y = wallHeight/2), so the floor was perfectly coplanar
+           // with every wall base: textbook z-fighting, worse the more you rotate the camera.
     (floorDepth - data.cellSize) / 2
   );
   scene.add(floor);
