@@ -71,7 +71,15 @@ uploadForm.addEventListener('submit', async (e) => {
 
   try {
     const formData = new FormData(uploadForm);
-    const res = await fetch('/api/convert', { method: 'POST', body: formData });
+    let res;
+    try {
+      res = await fetch('/api/convert', { method: 'POST', body: formData });
+    } catch (networkErr) {
+      // fetch() itself throws (not a 4xx/5xx response) only when the request never reached a
+      // server at all -- e.g. server.py has died. Distinguish this from a real conversion
+      // error so it's obvious the fix is "restart the server," not "try a different image."
+      throw new Error('Could not reach the server -- it may have stopped running. Ask for it to be restarted, then try again.');
+    }
     const data = await res.json();
 
     if (!res.ok || !data.success) {
