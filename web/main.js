@@ -194,6 +194,18 @@ function buildLevel(data) {
     (floorDepth - data.cellSize) / 2
   );
   scene.add(floor);
+
+  // Ceiling -- mirrors the floor at wallHeight. Without this, looking through any doorway
+  // or gap (nothing bounds the space from above) shows the sky background straight through,
+  // which reads as broken/see-through rather than "this leads to another room."
+  const ceiling = new THREE.Mesh(floorGeometry, new THREE.MeshStandardMaterial({ color: 0xdddddd }));
+  ceiling.rotation.x = Math.PI / 2;
+  ceiling.position.set(
+    (floorWidth - data.cellSize) / 2,
+    data.wallHeight + 0.01,
+    (floorDepth - data.cellSize) / 2
+  );
+  scene.add(ceiling);
 }
 
 // ---------- collision: grid lookup, not raycasting ----------
@@ -233,6 +245,12 @@ function collides(x, z) {
   return false;
 }
 
+// ---------- FPS counter (diagnostic -- reads actual on-screen numbers off the
+// user's own machine, since remote/automated tooling can't reliably measure this) ----------
+const fpsCounter = document.getElementById('fpsCounter');
+let fpsFrames = 0;
+let fpsLastSample = performance.now();
+
 // ---------- animation loop ----------
 const timer = new THREE.Timer();
 const velocity = new THREE.Vector3();
@@ -243,6 +261,15 @@ function animate() {
   requestAnimationFrame(animate);
   timer.update();
   const delta = Math.min(timer.getDelta(), 0.1);
+
+  fpsFrames++;
+  const now = performance.now();
+  if (now - fpsLastSample >= 500) {
+    const fps = Math.round((fpsFrames * 1000) / (now - fpsLastSample));
+    fpsCounter.textContent = fps + ' fps';
+    fpsFrames = 0;
+    fpsLastSample = now;
+  }
 
   if (controls.isLocked && level) {
     // Exponential damping so the player coasts to a stop instead of snapping.
