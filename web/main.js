@@ -70,6 +70,14 @@ controls.addEventListener('unlock', () => overlay.classList.remove('hidden'));
 // every frame, before the frame renders, so its raw/instant result never becomes visible.
 const ROTATION_SMOOTHING_RATE = 30; // 1/s -- higher = snappier, lower = smoother but laggier
 const PITCH_LIMIT = Math.PI / 2 - 0.001;
+// Time-based smoothing alone spreads a spike over a few frames instead of one, softening a
+// hard "snap" into a fast "accelerated" turn -- still visible, because the total rotation
+// amount is unchanged, just spread out. Clamping the raw per-event delta caps that amount
+// directly. 50px covers legitimate fast mouse movement (normal events run single/low-double
+// digits, see the on-screen log); anything past that is far more likely OS-level mouse
+// acceleration ("enhance pointer precision") or event-coalescing amplifying one instant of
+// physical movement than a real 50+ pixel jump between two polls a few ms apart.
+const MAX_MOUSE_DELTA = 50;
 let targetYaw = 0, targetPitch = 0, currentYaw = 0, currentPitch = 0;
 const lookEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
@@ -78,8 +86,10 @@ let mmCount = 0, mmWindowStart = performance.now(), mmLastT = null, mmMaxGap = 0
 document.addEventListener('mousemove', (e) => {
   if (!controls.isLocked) return;
 
-  targetYaw -= e.movementX * 0.002 * controls.pointerSpeed;
-  targetPitch -= e.movementY * 0.002 * controls.pointerSpeed;
+  const dx = Math.max(-MAX_MOUSE_DELTA, Math.min(MAX_MOUSE_DELTA, e.movementX));
+  const dy = Math.max(-MAX_MOUSE_DELTA, Math.min(MAX_MOUSE_DELTA, e.movementY));
+  targetYaw -= dx * 0.002 * controls.pointerSpeed;
+  targetPitch -= dy * 0.002 * controls.pointerSpeed;
   targetPitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, targetPitch));
 
   const t = performance.now();
