@@ -55,6 +55,25 @@
   }
   #skipClosingLabel input { margin-top: 2px; flex-shrink: 0; }
 
+  #savedLevelsRow { display: flex; gap: 6px; }
+  #savedLevelSelect {
+    flex: 1; padding: 5px; font-size: 13px; box-sizing: border-box;
+  }
+  #savedLevelsRow button {
+    width: auto; margin-top: 0; padding: 5px 14px; font-size: 13px;
+    cursor: pointer; border: none; border-radius: 5px;
+    background: #4a7fd6; color: #fff;
+  }
+  #savedLevelsRow button:disabled { opacity: 0.5; cursor: default; }
+  #loadLevelStatus { min-height: 16px; margin: 8px 0 0; font-size: 12px; }
+  #loadLevelStatus.error { color: #ff8a8a; }
+  #loadLevelStatus.ok { color: #8aff9e; }
+
+  .warnNote {
+    font-size: 11px; opacity: 0.7; margin: 12px 0 10px;
+    padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.15);
+  }
+
   #sensitivityRow {
     display: flex; align-items: center; gap: 8px; margin-top: 16px;
     padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.15);
@@ -83,7 +102,17 @@
   </div>
 
   <div id="uploadPanel">
+    <h2>Load a saved level</h2>
+    <div id="savedLevelsRow">
+      <select id="savedLevelSelect"><option>Loading…</option></select>
+      <button type="button" id="loadLevelButton">Load</button>
+    </div>
+    <p id="loadLevelStatus"></p>
+
     <h2>Load a blueprint image</h2>
+    <p class="warnNote">Uploading re-runs the converter from scratch on the image below --
+      any hand-edited fix to the current level will be overwritten. Use "Load a saved level"
+      above to get back to a saved grid instead of re-uploading the same image.</p>
     <form id="uploadForm">
       <label for="blueprintFile">Floor plan (PNG/JPG/PDF) &mdash; top-down view, not a section</label>
       <input type="file" id="blueprintFile" name="image" accept="image/png,image/jpeg,.pdf" required />

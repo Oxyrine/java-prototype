@@ -9,6 +9,7 @@ Run from anywhere; it chdirs to the project root itself so the conversion
 tools' relative paths (blueprints/, web/) are always correct.
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -102,6 +103,59 @@ def convert():
 
     return jsonify(success=True, wallCount=wall_count,
                     reachableFraction=round(reachable_fraction, 3), warning=warning)
+
+
+# "uploaded.txt" is excluded from the picker below on purpose: every re-upload of the same
+# image through /api/convert overwrites it silently, so a hand-edited fix saved under a
+# different name (e.g. apartment_demo.txt) is the only way to keep a corrected grid around --
+# this endpoint pair is exactly what lets you get back to that saved fix with one click instead
+# of re-running the CLI, which is what kept happening here.
+NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+@app.route("/api/levels")
+def list_levels():
+    names = sorted(
+        p.stem for p in BLUEPRINTS_DIR.glob("*.txt")
+        if p.stem != "uploaded" and NAME_PATTERN.match(p.stem)
+    )
+    return jsonify(levels=names)
+
+
+@app.route("/api/load-level", methods=["POST"])
+def load_level():
+    name = (request.get_json(silent=True) or {}).get("name", "")
+    if not NAME_PATTERN.match(name):
+        return jsonify(success=False, error="Invalid level name."), 400
+
+    grid_path = BLUEPRINTS_DIR / f"{name}.txt"
+    if not grid_path.is_file():
+        return jsonify(success=False, error=f"No saved level named '{name}'."), 404
+
+    header = grid_path.read_text(encoding="utf-8").splitlines()[:3]
+    cell_size = wall_height = None
+    for line in header:
+        m = re.search(r"cellSize=([\d.]+)", line)
+        if m:
+            cell_size = float(m.group(1))
+        m = re.search(r"wallHeight=([\d.]+)", line)
+        if m:
+            wall_height = float(m.group(1))
+
+    if cell_size is None or wall_height is None:
+        # Hand-written grids (e.g. level01.txt, house.txt from build_level.py's CLI runs
+        # before this endpoint existed) may not carry the header this endpoint parses --
+        # 1.0/3.0 match Phase 1's original constants, a reasonable default rather than a guess.
+        cell_size = cell_size if cell_size is not None else 1.0
+        wall_height = wall_height if wall_height is not None else 3.0
+
+    output_json = WEB_DIR / "level01.json"
+    try:
+        build_level.run_java(grid_path, output_json, cell_size, wall_height)
+    except SystemExit as e:
+        return jsonify(success=False, error=f"Level build failed: {e}"), 500
+
+    return jsonify(success=True)
 
 
 if __name__ == "__main__":

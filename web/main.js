@@ -124,6 +124,54 @@ setInterval(() => {
   mmMaxAbsDelta = 0;
 }, 1000);
 
+// ---------- saved level picker ----------
+const savedLevelSelect = document.getElementById('savedLevelSelect');
+const loadLevelButton = document.getElementById('loadLevelButton');
+const loadLevelStatus = document.getElementById('loadLevelStatus');
+
+fetch('/api/levels', { cache: 'no-store' })
+  .then((res) => res.json())
+  .then((data) => {
+    savedLevelSelect.innerHTML = '';
+    for (const name of data.levels) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      savedLevelSelect.appendChild(opt);
+    }
+    if (data.levels.length === 0) {
+      savedLevelSelect.innerHTML = '<option>No saved levels</option>';
+      loadLevelButton.disabled = true;
+    }
+  })
+  .catch(() => {
+    savedLevelSelect.innerHTML = '<option>Failed to load list</option>';
+    loadLevelButton.disabled = true;
+  });
+
+loadLevelButton.addEventListener('click', async () => {
+  const name = savedLevelSelect.value;
+  loadLevelButton.disabled = true;
+  loadLevelStatus.className = '';
+  loadLevelStatus.textContent = 'Loading…';
+  try {
+    const res = await fetch('/api/load-level', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+    loadLevelStatus.className = 'ok';
+    loadLevelStatus.textContent = `Loaded "${name}". Reloading…`;
+    setTimeout(() => window.location.reload(), 600);
+  } catch (err) {
+    loadLevelStatus.className = 'error';
+    loadLevelStatus.textContent = String(err.message || err);
+    loadLevelButton.disabled = false;
+  }
+});
+
 // ---------- sensitivity slider ----------
 const sensitivitySlider = document.getElementById('sensitivitySlider');
 const sensitivityValue = document.getElementById('sensitivityValue');
