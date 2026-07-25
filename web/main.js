@@ -15,7 +15,9 @@ const DEFAULT_POINTER_SPEED = 0.3; // PointerLockControls' own default (1) reads
 // alongside it. These swing open/closed purely as a visual, automatic-door effect;
 // the doorway itself stays exactly as walkable as it already was.
 const DOOR_HEIGHT = 2.0; // metres -- matches LevelBuilder.java's DOOR_HEIGHT (lintels start here)
-const DOOR_OPEN_ANGLE = Math.PI * 0.42; // ~75 degrees -- clearly open, not fully flat against the wall
+const DOOR_OPEN_ANGLE = Math.PI / 2; // 90 degrees -- must be fully flat against the wall, since doors
+// have no collision: anything less leaves the leaf swung diagonally across the doorway's walking line,
+// so the player walks straight into (and the camera clips through) the leaf mesh
 const DOOR_SWING_RATE = 6.0; // 1/s, exponential smoothing -- same pattern as camera rotation smoothing
 
 // ---------- scene ----------
