@@ -343,42 +343,45 @@ function buildLevel(data) {
   addInstancedGroup(fullWalls, wallMaterial);
   addInstancedGroup(lintels, lintelMaterial);
 
-  // Floor: one instanced tile per floor cell, colored per-room instead of one flat
-  // color for the whole building. With everything the same color (walls, floor,
-  // ceiling all uniform), there was no way to tell which room you were in while
-  // walking -- the floor color changing as you cross a doorway is the cheapest way
-  // to fix that without touching the Python/Java pipeline at all.
+  // Floor: one InstancedMesh per room color instead of one flat color for the whole
+  // building. With everything the same color (walls, floor, ceiling all uniform),
+  // there was no way to tell which room you were in while walking. First attempt
+  // used a single InstancedMesh with per-instance (vertexColors) color, which
+  // rendered solid black -- InstancedMesh.instanceColor needs the base geometry to
+  // carry its own vertex-color attribute to multiply against, which a plain
+  // PlaneGeometry doesn't have, and skipping that produced black instead of white.
+  // Grouping by color and reusing the exact addInstancedGroup pattern already
+  // proven for walls/lintels above sidesteps the whole issue.
   const roomColorOf = computeRoomColors(data);
   const floorTileGeometry = new THREE.PlaneGeometry(data.cellSize, data.cellSize);
   floorTileGeometry.rotateX(-Math.PI / 2);
-  const floorCells = [];
+  const floorCellsByColor = new Map();
   for (let r = 0; r < data.height; r++) {
     for (let c = 0; c < data.width; c++) {
       const color = roomColorOf(r, c);
       if (color === null) continue; // wall cell, no floor tile here
-      floorCells.push({
+      if (!floorCellsByColor.has(color)) floorCellsByColor.set(color, []);
+      floorCellsByColor.get(color).push({
         x: c * data.cellSize,
+        // nudged just below y=0 -- every wall's bottom face sits exactly at y=0
+        // (see LevelBuilder.java's y = wallHeight/2), so a coplanar floor is
+        // textbook z-fighting, worse the more you rotate the camera.
+        y: -0.01,
         z: (data.height - 1 - r) * data.cellSize,
-        color,
       });
     }
   }
-  // nudged just below y=0 -- every wall's bottom face sits exactly at y=0 (see
-  // LevelBuilder.java's y = wallHeight/2), so a coplanar floor is textbook
-  // z-fighting, worse the more you rotate the camera.
-  const floorMesh = new THREE.InstancedMesh(
-    floorTileGeometry, new THREE.MeshStandardMaterial({ vertexColors: true }), floorCells.length);
-  const tmpColor = new THREE.Color();
-  floorCells.forEach((cell, i) => {
-    matrix.identity();
-    matrix.setPosition(cell.x, -0.01, cell.z);
-    floorMesh.setMatrixAt(i, matrix);
-    tmpColor.setHex(cell.color);
-    floorMesh.setColorAt(i, tmpColor);
-  });
-  floorMesh.instanceMatrix.needsUpdate = true;
-  if (floorMesh.instanceColor) floorMesh.instanceColor.needsUpdate = true;
-  scene.add(floorMesh);
+  for (const [color, cells] of floorCellsByColor) {
+    const mesh = new THREE.InstancedMesh(
+      floorTileGeometry, new THREE.MeshStandardMaterial({ color }), cells.length);
+    cells.forEach((cell, i) => {
+      matrix.identity();
+      matrix.setPosition(cell.x, cell.y, cell.z);
+      mesh.setMatrixAt(i, matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    scene.add(mesh);
+  }
 
   // One stretched ceiling plane -- kept flat/uniform rather than per-room like the
   // floor. Without it, looking through any doorway or gap (nothing bounds the space
