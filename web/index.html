@@ -50,6 +50,16 @@
 </div>
 <div id="crosshair"></div>
 
+<!-- Live HUD, shown only while pointer-locked (body.locked). The compass strip is a
+     fixed window over a 3x-repeated tick bar that main.js slides with translateX. -->
+<div id="hud">
+  <div id="compass"><div id="compassStrip"></div></div>
+  <div id="hudReadout">
+    <span id="hudRoom">&mdash;</span>
+    <span id="hudCoords">X 0.00  Z 0.00</span>
+  </div>
+</div>
+
 <script type="importmap">
 {
   "imports": {

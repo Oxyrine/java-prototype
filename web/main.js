@@ -622,6 +622,62 @@ function drawMinimap() {
   minimapCtx.stroke();
 }
 
+// ---------- live HUD ----------
+// Compass geometry: the strip is three full revolutions long so it never runs out of
+// content at either edge of the window, and we always read off the middle copy.
+const COMPASS_WINDOW = 260;  // must match #compass width in style.css
+const COMPASS_REVOLUTION = 720; // px per 360 degrees -- 2px per degree
+const COMPASS_LABELS = ['N', '30', '60', 'E', '120', '150', 'S', '210', '240', 'W', '300', '330'];
+
+const hudRoom = document.getElementById('hudRoom');
+const hudCoords = document.getElementById('hudCoords');
+const compassStrip = document.getElementById('compassStrip');
+
+compassStrip.style.width = `${COMPASS_REVOLUTION * 3}px`;
+for (let copy = 0; copy < 3; copy++) {
+  COMPASS_LABELS.forEach((text, i) => {
+    const span = document.createElement('span');
+    span.textContent = text;
+    if (text.length === 1) span.className = 'cardinal';
+    span.style.left = `${copy * COMPASS_REVOLUTION + (i / COMPASS_LABELS.length) * COMPASS_REVOLUTION}px`;
+    compassStrip.appendChild(span);
+  });
+}
+
+// Three text nodes rewritten 60x/second would invalidate layout every frame for nothing,
+// since the rounded values only change a handful of times a second. Cache and compare.
+let lastRoomText = '', lastCoordsText = '';
+
+function updateHud() {
+  if (!level || !controls.isLocked) return;
+
+  // Heading straight from the look direction rather than from currentYaw: north is -z
+  // and east is +x by the LevelBuilder mapping, so atan2(x, -z) is unambiguous and
+  // there is no sign convention to get backwards.
+  const heading = (Math.atan2(forwardDir.x, -forwardDir.z) * 180 / Math.PI + 360) % 360;
+  compassStrip.style.transform =
+    `translateX(${COMPASS_WINDOW / 2 - COMPASS_REVOLUTION - heading * (COMPASS_REVOLUTION / 360)}px)`;
+
+  const { row, col } = playerCell();
+  const inGrid = row >= 0 && row < level.height && col >= 0 && col < level.width;
+  const id = (roomIdOf && inGrid) ? roomIdOf(row, col) : null;
+  // null (standing in a wall cell) only happens transiently at a doorway edge; keeping
+  // the previous label is less distracting than blinking to a placeholder.
+  const roomText = id === null ? lastRoomText
+    : id < 0 ? 'DOORWAY'
+    : `ROOM ${String(id + 1).padStart(2, '0')}`;
+  if (roomText !== lastRoomText) {
+    hudRoom.textContent = roomText;
+    lastRoomText = roomText;
+  }
+
+  const coordsText = `X ${camera.position.x.toFixed(2)}  Z ${camera.position.z.toFixed(2)}`;
+  if (coordsText !== lastCoordsText) {
+    hudCoords.textContent = coordsText;
+    lastCoordsText = coordsText;
+  }
+}
+
 // ---------- collision: grid lookup, not raycasting ----------
 // Inverts the Java LevelBuilder mapping (x = col*cellSize, z = (rows-1-row)*cellSize)
 // to turn a grid cell into a wall/floor check.
@@ -812,6 +868,7 @@ function animate() {
   }
 
   drawMinimap();
+  updateHud();
   renderer.render(scene, camera);
 }
 

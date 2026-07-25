@@ -237,6 +237,54 @@ body.locked #crosshair { opacity: .75; }
   font-size: 12px; color: var(--bp-line);
 }
 
+/* ---------- live HUD ---------- */
+#hud {
+  position: fixed; inset: 0; z-index: 10;
+  pointer-events: none; /* never intercept the click that engages pointer lock */
+  opacity: 0; transition: opacity .35s ease .15s;
+  font-family: var(--bp-mono); color: var(--bp-line);
+}
+body.locked #hud { opacity: 1; }
+
+/* Fixed-width window over a strip three revolutions long; main.js only ever writes
+   transform on the strip, so this costs a compositor move and never a reflow. */
+#compass {
+  position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
+  width: 260px; height: 26px; overflow: hidden;
+  border-top: 1px solid rgba(79,195,247,.3);
+  border-bottom: 1px solid rgba(79,195,247,.3);
+  background: rgba(10,25,41,.45);
+  /* Fade both ends so headings slide in and out instead of popping at the edge. */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+}
+#compassStrip { position: absolute; top: 0; left: 0; height: 100%; will-change: transform; }
+#compassStrip span {
+  position: absolute; top: 0; line-height: 26px;
+  transform: translateX(-50%);
+  font-size: 11px; letter-spacing: .1em;
+  color: rgba(224,242,254,.55);
+}
+#compassStrip span.cardinal { color: var(--bp-glow); font-weight: 600; font-size: 12px; }
+/* Centre index mark -- the heading is whatever sits under this. */
+#compass::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 50%;
+  width: 1px; margin-left: -.5px; background: var(--bp-line);
+  box-shadow: 0 0 8px var(--bp-line);
+}
+
+#hudReadout {
+  position: absolute; left: 16px; bottom: 16px;
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 12px; letter-spacing: .08em;
+  text-shadow: 0 1px 4px rgba(0,0,0,.8);
+}
+#hudRoom {
+  font-size: 15px; font-weight: 600; letter-spacing: .18em;
+  color: var(--bp-glow);
+}
+#hudCoords { color: rgba(224,242,254,.6); }
+
 /* ---------- minimap ---------- */
 #minimap {
   position: fixed; right: 14px; bottom: 14px; z-index: 10;
