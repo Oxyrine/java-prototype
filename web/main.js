@@ -252,24 +252,41 @@ function buildLevel(data) {
   // walls arrive with real, varied dimensions instead of one cellSize cube each.
   const wallGeometry = new THREE.BoxGeometry(1, 1, 1);
   const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x8899aa });
+  // A doorway lintel is any wall box shorter than the full wall height (LevelBuilder.java
+  // emits these for '3' cells, spanning door-height up to the ceiling). Giving it the
+  // same flat gray as every other wall made it visually disappear into the wall face --
+  // the header was structurally a doorframe but read as just more wall. A distinct warm
+  // trim color is the cheapest way to make an opening actually look like a built doorway
+  // instead of a hole with matching-colored geometry above it.
+  const lintelMaterial = new THREE.MeshStandardMaterial({ color: 0x8b6f47 });
 
-  // One InstancedMesh for every wall, not one Mesh each. Phase 1's maze had
-  // 56 walls; a real floor plan can have hundreds -- individual Mesh objects
-  // would mean hundreds of draw calls. Collision is unaffected: it reads the
-  // JSON grid directly, not these meshes.
-  const wallMesh = new THREE.InstancedMesh(wallGeometry, wallMaterial, data.walls.length);
+  const fullWalls = data.walls.filter((w) => w.size.y >= data.wallHeight - 0.001);
+  const lintels = data.walls.filter((w) => w.size.y < data.wallHeight - 0.001);
+
+  // One InstancedMesh per material, not one Mesh each. Phase 1's maze had 56
+  // walls; a real floor plan can have hundreds -- individual Mesh objects would
+  // mean hundreds of draw calls. Collision is unaffected: it reads the JSON
+  // grid directly, not these meshes.
   const matrix = new THREE.Matrix4();
   const position = new THREE.Vector3();
   const quaternion = new THREE.Quaternion();
   const scale = new THREE.Vector3();
-  data.walls.forEach((wall, i) => {
-    position.set(wall.position.x, wall.position.y, wall.position.z);
-    scale.set(wall.size.x, wall.size.y, wall.size.z);
-    matrix.compose(position, quaternion, scale);
-    wallMesh.setMatrixAt(i, matrix);
-  });
-  wallMesh.instanceMatrix.needsUpdate = true;
-  scene.add(wallMesh);
+
+  function addInstancedGroup(walls, material) {
+    if (walls.length === 0) return;
+    const mesh = new THREE.InstancedMesh(wallGeometry, material, walls.length);
+    walls.forEach((wall, i) => {
+      position.set(wall.position.x, wall.position.y, wall.position.z);
+      scale.set(wall.size.x, wall.size.y, wall.size.z);
+      matrix.compose(position, quaternion, scale);
+      mesh.setMatrixAt(i, matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    scene.add(mesh);
+  }
+
+  addInstancedGroup(fullWalls, wallMaterial);
+  addInstancedGroup(lintels, lintelMaterial);
 
   // One stretched floor plane instead of one tile per '0' cell.
   const floorWidth = data.width * data.cellSize;
