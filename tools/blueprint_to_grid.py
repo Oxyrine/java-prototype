@@ -603,7 +603,18 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     wall_mask = prune_wall_tips(wall_mask)
 
     cell_size = width_metres / cols_actual
-    door_cells_wide = max(3, round(0.9 / cell_size))  # 0.9m minimum doorway width
+    # A nominal "0.9m door" isn't enough clearance in practice: main.js's collides()
+    # rounds each cell test rather than doing continuous overlap, and carve_doorways'
+    # own safety guards (exterior guard, regularization skip) can shrink the actually-
+    # achieved opening below what was requested. Measured (see conversation): a 7-cell
+    # (0.875m) door left a truly-clear center path barely wider than the player's own
+    # collision box -- confirmed causing real stuck-at-the-doorway collisions, not
+    # just a cosmetic tight squeeze. Size the door around the player's own radius
+    # (mirrors PLAYER_RADIUS in web/main.js) plus a full metre of margin, rather than
+    # a bare real-world minimum that assumes perfect, lossless carving.
+    player_radius = min(0.25, cell_size * 1.5)
+    door_metres = max(0.9, player_radius * 2 + 1.0)
+    door_cells_wide = max(3, round(door_metres / cell_size))
     # Real interior walls run ~0.1-0.3m thick. This bounds how deep a "doorway" is
     # allowed to tunnel: cols_actual // 12 (the old value) scaled up to 8+ cells / 1m+
     # on a 96-col grid, letting the carver burrow through an entire solid block (a
