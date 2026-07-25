@@ -82,7 +82,14 @@ window.addEventListener('resize', () => {
 // 0x5a-0x9a midrange where the 14 ROOM_PALETTE entries live -- their mutual separation is
 // the whole point of that feature. Tinting the lights shifts every surface uniformly, so
 // every color relationship already tuned survives intact.
-scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x0a1929, 1.1));
+//
+// The ground color is NOT just "the dark end of the gradient". The ceiling plane's normal
+// points straight down, so the hemisphere weight is 0 and it receives groundColor and
+// nothing else -- the sun sits at y=+25 and contributes nothing to a downward-facing
+// surface. Setting this to 0x0a1929 against a 0x1d3348 ceiling multiplied out to #000002,
+// a literally black ceiling. Read this as "light bouncing back up off the lit floor",
+// which is also what it physically is, and keep it well above the fog color.
+scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x62809e, 1.1));
 const sun = new THREE.DirectionalLight(0xfff2dd, 1.3);
 sun.position.set(15, 25, 10);
 scene.add(sun);
@@ -531,11 +538,14 @@ function buildLevel(data) {
   // same flat gray as every other wall made it visually disappear into the wall face --
   // the header was structurally a doorframe but read as just more wall. A distinct warm
   // trim color is the cheapest way to make an opening actually look like a built doorway
-  // instead of a hole with matching-colored geometry above it. Now emissive drafting
-  // cyan (matches --bp-line in style.css), so every doorway reads as a lit opening and
-  // doubles as wayfinding down a dark corridor.
+  // instead of a hole with matching-colored geometry above it. It carries a faint cyan
+  // emissive (--bp-line in style.css) so a doorway still reads as a lit opening down a
+  // dark corridor -- but only faint. At 0.85 the header became a flat, blown-out cyan
+  // slab that read as a light fixture bolted over the door rather than a doorframe, and
+  // it was the loudest thing in every frame. The base color does the work; the emissive
+  // just keeps it from going flat in shadow.
   const lintelMaterial = new THREE.MeshStandardMaterial({
-    color: 0x0d2137, emissive: 0x4fc3f7, emissiveIntensity: 0.85,
+    color: 0x35566f, emissive: 0x4fc3f7, emissiveIntensity: 0.18,
   });
 
   const fullWalls = data.walls.filter((w) => w.size.y >= data.wallHeight - 0.001);
@@ -550,13 +560,12 @@ function buildLevel(data) {
   const quaternion = new THREE.Quaternion();
   const scale = new THREE.Vector3();
 
-  function addInstancedGroup(walls, material, scaleMul) {
+  function addInstancedGroup(walls, material) {
     if (walls.length === 0) return;
     const mesh = new THREE.InstancedMesh(wallGeometry, material, walls.length);
     walls.forEach((wall, i) => {
       position.set(wall.position.x, wall.position.y, wall.position.z);
       scale.set(wall.size.x, wall.size.y, wall.size.z);
-      if (scaleMul) scale.multiply(scaleMul);
       matrix.compose(position, quaternion, scale);
       mesh.setMatrixAt(i, matrix);
     });
@@ -566,19 +575,10 @@ function buildLevel(data) {
 
   addInstancedGroup(fullWalls, wallMaterial);
   addInstancedGroup(lintels, lintelMaterial);
-
-  // Halo: a second, slightly larger additive shell over the same lintel boxes. Gets a
-  // bloom-like falloff for one extra draw call, with no EffectComposer in the project and
-  // no post-processing pass over the whole frame.
-  // X and Z only, Y stays exactly 1.0 -- a lintel is only (wallHeight - DOOR_HEIGHT) tall
-  // and sits flush under the ceiling, so even a 6% vertical scale pokes the halo through
-  // it. Emphatically not a PointLight per doorway: each added light forces a shader
-  // permutation recompile and multiplies the per-fragment lighting loop across every
-  // InstancedMesh in the scene.
-  addInstancedGroup(lintels, new THREE.MeshBasicMaterial({
-    color: 0x4fc3f7, transparent: true, opacity: 0.16,
-    blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
-  }), new THREE.Vector3(1.06, 1.0, 1.06));
+  // No additive halo shell here. A 6%-scaled copy of a box only a few centimetres thick
+  // does not read as a soft glow -- it reads as a second, misaligned box, showing up as a
+  // hard offset lip along one edge of every header. It also carried fog:false, so distant
+  // doorways glowed at full strength while the wall around them faded out.
 
   // Floor: one InstancedMesh per room color instead of one flat color for the whole
   // building. With everything the same color (walls, floor, ceiling all uniform),
@@ -628,9 +628,10 @@ function buildLevel(data) {
   const floorWidth = data.width * data.cellSize;
   const floorDepth = data.height * data.cellSize;
   const floorGeometry = new THREE.PlaneGeometry(floorWidth, floorDepth);
-  // Dark navy, matching the walls -- a bright ceiling would wash out the lintel glow and
-  // is the single largest bright surface in frame.
-  const ceiling = new THREE.Mesh(floorGeometry, new THREE.MeshStandardMaterial({ color: 0x1d3348 }));
+  // Looks far too light as a hex, and renders as #233851 -- see the hemisphere ground
+  // color above. This surface only ever receives that one term, halved twice over by the
+  // Lambert 1/PI factor, so it has to start bright to land as visible dark navy.
+  const ceiling = new THREE.Mesh(floorGeometry, new THREE.MeshStandardMaterial({ color: 0xa8c0d8 }));
   ceiling.rotation.x = Math.PI / 2;
   ceiling.position.set(
     (floorWidth - data.cellSize) / 2,
