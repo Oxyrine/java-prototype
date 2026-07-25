@@ -440,6 +440,34 @@ function collides(x, z) {
   return false;
 }
 
+// ---------- stuck detector (diagnostic) ----------
+// Screenshots alone haven't pinned down why some doorways feel impassable despite
+// every offline simulation saying they're clear -- log hard numbers the instant it
+// actually happens instead of guessing from another picture. Fires once per stuck
+// episode (not every frame) so the console stays readable.
+let stuckFrames = 0;
+let wasStuck = false;
+function logStuckDiagnostic(x, z) {
+  const cellSize = level.cellSize;
+  const rows = level.height;
+  const col = x / cellSize;
+  const rowF = rows - 1 - z / cellSize;
+  const c0 = Math.round(col), r0 = Math.round(rowF);
+  let nearby = '';
+  for (let r = r0 - 2; r <= r0 + 2; r++) {
+    let line = '';
+    for (let c = c0 - 4; c <= c0 + 4; c++) {
+      line += (r === r0 && c === c0) ? '@' : cellAt(r, c);
+    }
+    nearby += line + '\n';
+  }
+  console.warn(
+    `STUCK at x=${x.toFixed(3)} z=${z.toFixed(3)} (col=${col.toFixed(2)} row=${rowF.toFixed(2)}) ` +
+    `PLAYER_RADIUS=${PLAYER_RADIUS.toFixed(3)} cellSize=${cellSize.toFixed(3)}\n` +
+    `Grid around player ('@' = player center, row ${r0 - 2}-${r0 + 2}, col ${c0 - 4}-${c0 + 4}):\n${nearby}`
+  );
+}
+
 // ---------- animation loop ----------
 const timer = new THREE.Timer();
 const velocity = new THREE.Vector3();
@@ -485,15 +513,28 @@ function animate() {
 
     // Resolve X and Z independently so hitting a wall at an angle slides you
     // along it instead of stopping you dead.
+    let movedX = false, movedZ = false;
     if (!collides(nextX, pos.z)) {
-      pos.x = nextX;
+      pos.x = nextX; movedX = true;
     } else {
       velocity.x = 0;
     }
     if (!collides(pos.x, nextZ)) {
-      pos.z = nextZ;
+      pos.z = nextZ; movedZ = true;
     } else {
       velocity.z = 0;
+    }
+
+    const tryingToMove = inputForward !== 0 || inputRight !== 0;
+    if (tryingToMove && !movedX && !movedZ) {
+      stuckFrames++;
+    } else {
+      stuckFrames = 0;
+      wasStuck = false;
+    }
+    if (stuckFrames > 20 && !wasStuck) {
+      wasStuck = true;
+      logStuckDiagnostic(pos.x, pos.z);
     }
   }
 
