@@ -257,6 +257,34 @@ def keep_largest_wall_component(wall_mask: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# Stage 6c: prune isolated wall-cell tips -- 1-pixel rasterization noise near a
+# wall's corner (a slightly non-straight edge in the source image) that survives
+# keep_largest_wall_component because it's 8-connected to the real wall, even
+# though structurally it's not part of it. A tip has at most one 4-connected wall
+# neighbour; a real wall segment's interior cells always have two (one on each
+# side along the wall), so this can only ever trim the last cell off a genuine
+# wall's end, never break a wall in the middle. Confirmed blocking real movement
+# when one such tip landed right at a doorway corner (see conversation) --
+# player collision uses the actual grid cells, not just doorway "width on paper".
+# ---------------------------------------------------------------------------
+
+def prune_wall_tips(wall_mask: np.ndarray) -> np.ndarray:
+    rows, cols = wall_mask.shape
+    pruned = wall_mask.copy()
+    for r in range(rows):
+        for c in range(cols):
+            if not wall_mask[r, c]:
+                continue
+            degree = sum(
+                1 for dr, dc in _NEIGHBORS_4
+                if 0 <= r + dr < rows and 0 <= c + dc < cols and wall_mask[r + dr, c + dc]
+            )
+            if degree <= 1:
+                pruned[r, c] = False
+    return pruned
+
+
+# ---------------------------------------------------------------------------
 # Stage 7: seal the border so the player can't walk out into the void.
 #
 # Fills every floor cell OUTSIDE the building -- the whole margin between the
@@ -571,6 +599,8 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
 
     if keep_largest_only:
         wall_mask = keep_largest_wall_component(wall_mask)
+
+    wall_mask = prune_wall_tips(wall_mask)
 
     cell_size = width_metres / cols_actual
     door_cells_wide = max(3, round(0.9 / cell_size))  # 0.9m minimum doorway width
