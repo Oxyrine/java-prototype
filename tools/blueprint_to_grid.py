@@ -697,23 +697,18 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     wall_mask = prune_wall_tips(wall_mask)
 
     cell_size = width_metres / cols_actual
-    # A nominal "0.9m door" isn't enough clearance in practice: main.js's collides()
-    # rounds each cell test rather than doing continuous overlap, and carve_doorways'
-    # own safety guards (exterior guard, regularization skip) can shrink the actually-
-    # achieved opening below what was requested. Measured (see conversation): a 7-cell
-    # (0.875m) door left a truly-clear center path barely wider than the player's own
-    # collision box -- confirmed causing real stuck-at-the-doorway collisions, not
-    # just a cosmetic tight squeeze. Size the door around the player's own radius
-    # (mirrors PLAYER_RADIUS in web/main.js) plus a full metre of margin, rather than
-    # a bare real-world minimum that assumes perfect, lossless carving.
-    # The +1.0m version above still measured as "stuck" in direct hands-on testing
-    # despite passing every simulation (BFS reachability, per-frame movement at a
-    # range of approach angles) -- the discrepancy wasn't pinned down, so rather
-    # than keep tuning a narrow margin against a mismatch between simulation and
-    # the real browser, go wide enough that no plausible remaining subtlety
-    # (rounding, approach angle, corner deadlock) can matter.
+    # Earlier this was blown out to 1.725m ("go wide enough that no plausible
+    # remaining subtlety can matter") while chasing doorway-stuck reports that
+    # turned out to be collision bugs in main.js's collides() (asymmetric
+    # rounding, exact-boundary epsilon, wall-jog holes) -- all now fixed. door_cells
+    # also sets carve_doorways' perpendicular widening (half = door_cells // 2), so
+    # an oversized metres value doesn't just make a wide door: on a wall shared by
+    # two rooms it sweeps that width along the wall itself, carving a many-cell-long
+    # slot instead of a door (confirmed on a real upload at cell_size=0.075m: a
+    # 23-cell request produced a 25-row-tall carved strip). Back to a real single-door
+    # width, still with margin over the player.
     player_radius = min(0.25, cell_size * 1.5)
-    door_metres = max(1.2, player_radius * 2 + 1.5)
+    door_metres = max(0.9, player_radius * 2 + 0.4)
     door_cells_wide = max(3, round(door_metres / cell_size))
     # Real interior walls run ~0.1-0.3m thick. This bounds how deep a "doorway" is
     # allowed to tunnel: cols_actual // 12 (the old value) scaled up to 8+ cells / 1m+
