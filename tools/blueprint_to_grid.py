@@ -261,25 +261,44 @@ def keep_largest_wall_component(wall_mask: np.ndarray) -> np.ndarray:
 # wall's corner (a slightly non-straight edge in the source image) that survives
 # keep_largest_wall_component because it's 8-connected to the real wall, even
 # though structurally it's not part of it. A tip has at most one 4-connected wall
-# neighbour; a real wall segment's interior cells always have two (one on each
-# side along the wall), so this can only ever trim the last cell off a genuine
-# wall's end, never break a wall in the middle. Confirmed blocking real movement
-# when one such tip landed right at a doorway corner (see conversation) --
-# player collision uses the actual grid cells, not just doorway "width on paper".
+# neighbour. Confirmed blocking real movement when one such tip landed right at
+# a doorway corner (see conversation) -- player collision uses the actual grid
+# cells, not just doorway "width on paper".
+#
+# A degree-1 tip alone isn't enough to call it noise, though: at this source
+# resolution a long, perfectly real wall commonly lands in a column 1 cell over
+# partway down (a "jog") purely from rasterizing a nearly-straight line -- the
+# cell right at that jog is ALSO degree-1 in 4-connectivity, but it's not noise,
+# it's the wall continuing. Confirmed via a live stuck-position log: pruning
+# one of these punched an unintended 1-cell hole into what should have stayed a
+# solid wall, combining with the jog's own natural notch into a pinch point a
+# player could partially wedge into but not pass through. Distinguish the two:
+# a jog has a diagonal wall neighbour continuing roughly opposite the one
+# 4-connected neighbour (the wall picking back up one column over); true noise
+# doesn't. Only prune when there's no such continuation.
 # ---------------------------------------------------------------------------
 
 def prune_wall_tips(wall_mask: np.ndarray) -> np.ndarray:
     rows, cols = wall_mask.shape
     pruned = wall_mask.copy()
+
+    def in_bounds_wall(r, c):
+        return 0 <= r < rows and 0 <= c < cols and wall_mask[r, c]
+
     for r in range(rows):
         for c in range(cols):
             if not wall_mask[r, c]:
                 continue
-            degree = sum(
-                1 for dr, dc in _NEIGHBORS_4
-                if 0 <= r + dr < rows and 0 <= c + dc < cols and wall_mask[r + dr, c + dc]
-            )
-            if degree <= 1:
+            wall_neighbors = [(dr, dc) for dr, dc in _NEIGHBORS_4 if in_bounds_wall(r + dr, c + dc)]
+            if len(wall_neighbors) > 1:
+                continue
+            if len(wall_neighbors) == 0:
+                pruned[r, c] = False
+                continue
+            ndr, ndc = wall_neighbors[0]
+            diag_checks = [(-ndr, -1), (-ndr, 1)] if ndr != 0 else [(-1, -ndc), (1, -ndc)]
+            continues_as_jog = any(in_bounds_wall(r + dr, c + dc) for dr, dc in diag_checks)
+            if not continues_as_jog:
                 pruned[r, c] = False
     return pruned
 
@@ -450,6 +469,24 @@ def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, doo
         if any(unsafe[r, c] for r, c in box_cells):
             continue
         for r, c in box_cells:
+            wall_mask[r, c] = False
+            door_cells_set.add((r, c))
+
+    # Absorb 1-2 cell jogs in the walls immediately flanking a doorway -- at this
+    # source resolution (a couple px/cell) the same physical wall can land in a
+    # different column a few rows apart purely from rasterization noise, not a
+    # real architectural step. A carved opening that's wide by design can still
+    # end at a threshold where the ORIGINAL, never-carved wall on either side
+    # is offset, leaving a pinch point exactly at the transition (confirmed via
+    # a live stuck-position log: the doorway itself was clear, but the pre-
+    # existing wall one row past its edge sat a couple cells over from where the
+    # carve ended). Dilate the final opening by one more cell so it swallows any
+    # jog sitting right at its boundary, without touching the exterior guard.
+    door_mask = np.zeros_like(wall_mask)
+    for r, c in door_cells_set:
+        door_mask[r, c] = True
+    for r, c in zip(*np.where(dilate(door_mask))):
+        if wall_mask[r, c] and not unsafe[r, c]:
             wall_mask[r, c] = False
             door_cells_set.add((r, c))
 
