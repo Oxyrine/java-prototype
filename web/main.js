@@ -418,19 +418,34 @@ function cellAt(row, col) {
 // enough, but on a fine grid (a real floor plan's cellSize ~0.1m) the player's
 // box can span several cells per side -- a corner-only test can straddle a
 // wall cell in the middle entirely and let the player walk straight through it.
+//
+// Cell c (in cellSize units) physically spans [c-0.5, c+0.5]; it overlaps a
+// window [lo,hi] iff c-0.5 < hi AND c+0.5 > lo, i.e. lo-0.5 < c < hi+0.5. The
+// smallest/largest integers satisfying that strict range are floor(lo-0.5)+1
+// and ceil(hi+0.5)-1. Confirmed via a live stuck-position log (see git history)
+// that plain Math.round() on each edge independently does NOT compute this:
+// PLAYER_RADIUS is exactly 1.5*cellSize, so whenever a position lines up so an
+// edge lands exactly on a .5 boundary (common on grid-aligned geometry -- e.g.
+// standing still near a wall), Math.round rounds BOTH edges up (JS always
+// rounds .5 up), asymmetrically padding the tested range by one extra cell on
+// one side. Confirmed case: player dead-center on clear floor with no wall
+// within its true radius still collided, because the old formula's window
+// reached a wall a full cell outside where the player's box actually was.
+function overlapRange(lo, hi) {
+  return [Math.floor(lo - 0.5) + 1, Math.ceil(hi + 0.5) - 1];
+}
+
 function collides(x, z) {
   if (!solidGrid) return false;
   const cellSize = level.cellSize;
   const rows = level.height;
 
-  const colMin = Math.round((x - PLAYER_RADIUS) / cellSize);
-  const colMax = Math.round((x + PLAYER_RADIUS) / cellSize);
-  // z -> row is inverted (row = rows-1-round(z/cellSize)), so the row for the
-  // larger z is the SMALLER row index -- compute both and take min/max.
-  const rowA = rows - 1 - Math.round((z - PLAYER_RADIUS) / cellSize);
-  const rowB = rows - 1 - Math.round((z + PLAYER_RADIUS) / cellSize);
-  const rowMin = Math.min(rowA, rowB);
-  const rowMax = Math.max(rowA, rowB);
+  const [colMin, colMax] = overlapRange((x - PLAYER_RADIUS) / cellSize, (x + PLAYER_RADIUS) / cellSize);
+  // z -> row is inverted (row = rows-1-z/cellSize), so compute the raw (pre-flip)
+  // range first, then flip both ends -- flipping swaps which end is min/max.
+  const [rawRowMin, rawRowMax] = overlapRange((z - PLAYER_RADIUS) / cellSize, (z + PLAYER_RADIUS) / cellSize);
+  const rowMin = rows - 1 - rawRowMax;
+  const rowMax = rows - 1 - rawRowMin;
 
   for (let r = rowMin; r <= rowMax; r++) {
     for (let c = colMin; c <= colMax; c++) {
