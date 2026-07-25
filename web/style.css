@@ -20,12 +20,22 @@ html, body {
 canvas { display: block; }
 
 #crosshair {
+  --cross: var(--bp-glow);
   position: fixed; top: 50%; left: 50%;
   width: 18px; height: 18px; margin: -9px 0 0 -9px;
-  pointer-events: none; opacity: 0; transition: opacity .3s ease .2s;
+  pointer-events: none; opacity: 0;
+  /* The .2s delay is for the entry fade, so it must not apply to the transform --
+     interaction feedback a fifth of a second late reads as the game ignoring you. */
+  transition: opacity .3s ease .2s, transform .12s ease;
 }
 /* Only while pointer-locked -- an aiming reticle over the menu is noise. */
 body.locked #crosshair { opacity: .75; }
+/* Crosshair is on a door within reach: warm up and open out. This is the whole
+   interaction prompt -- see updateDoorFocus() in main.js, which toggles the class. */
+body.canInteract #crosshair {
+  --cross: #ffc98a;
+  opacity: 1; transform: scale(1.35);
+}
 /* Drafting cross: two hairlines with a gap at the centre, drawn with gradients so
    there is no extra markup. */
 #crosshair::before, #crosshair::after {
@@ -33,11 +43,11 @@ body.locked #crosshair { opacity: .75; }
 }
 #crosshair::before {
   width: 1px; height: 18px;
-  background: linear-gradient(var(--bp-glow) 0 40%, transparent 40% 60%, var(--bp-glow) 60%);
+  background: linear-gradient(var(--cross) 0 40%, transparent 40% 60%, var(--cross) 60%);
 }
 #crosshair::after {
   width: 18px; height: 1px;
-  background: linear-gradient(90deg, var(--bp-glow) 0 40%, transparent 40% 60%, var(--bp-glow) 60%);
+  background: linear-gradient(90deg, var(--cross) 0 40%, transparent 40% 60%, var(--cross) 60%);
 }
 
 /* ---------- overlay: graph paper over the live 3D world ---------- */
