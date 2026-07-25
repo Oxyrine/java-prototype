@@ -495,18 +495,19 @@ def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, doo
         if min(r1 - r0 + 1, c1 - c0 + 1) > max_thickness + 1:
             continue
         box_cells = [(r, c) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)]
-        if any(unsafe[r, c] for r, c in box_cells):
-            continue
-        # Same indirect-breach risk as the main carve loop above -- verify
-        # dynamically rather than trusting the static buffer alone.
-        new_cells = [cell for cell in box_cells if cell not in door_cells_set]
-        for r, c in new_cells:
-            wall_mask[r, c] = False
-        if int(outside_mask(wall_mask).sum()) > baseline_outside_count:
-            for r, c in new_cells:
-                wall_mask[r, c] = True
-            continue
-        door_cells_set.update(new_cells)
+        # Verify per-cell, not as one all-or-nothing box: rejecting the WHOLE
+        # box because one corner of it is risky throws away the many cells
+        # that were perfectly safe to fill, which is exactly what leaves a
+        # doorway's edge notched/irregular -- confirmed causing a real stuck
+        # collision at one such notch (a wall corner right at a doorway
+        # threshold). Fill whatever subset is actually safe.
+        for r, c in box_cells:
+            if wall_mask[r, c] and (r, c) not in door_cells_set and not unsafe[r, c]:
+                wall_mask[r, c] = False
+                if int(outside_mask(wall_mask).sum()) > baseline_outside_count:
+                    wall_mask[r, c] = True
+                else:
+                    door_cells_set.add((r, c))
 
     # Absorb 1-2 cell jogs in the walls immediately flanking a doorway -- at this
     # source resolution (a couple px/cell) the same physical wall can land in a
@@ -518,19 +519,33 @@ def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, doo
     # existing wall one row past its edge sat a couple cells over from where the
     # carve ended). Dilate the final opening by one more cell so it swallows any
     # jog sitting right at its boundary, without touching the exterior guard.
-    door_mask = np.zeros_like(wall_mask)
-    for r, c in door_cells_set:
-        door_mask[r, c] = True
-    for r, c in zip(*np.where(dilate(door_mask))):
-        if not wall_mask[r, c] or unsafe[r, c]:
-            continue
-        # Same indirect-breach risk as above -- verify each cell individually
-        # rather than trusting the static buffer alone.
-        wall_mask[r, c] = False
-        if int(outside_mask(wall_mask).sum()) > baseline_outside_count:
-            wall_mask[r, c] = True
-            continue
-        door_cells_set.add((r, c))
+    #
+    # Runs a small, FIXED number of passes (2), not to a fixed point: a single
+    # dilation only ever looks one cell out from the door cells that existed
+    # BEFORE this step started, so a jog that's 2 cells deep (confirmed on a
+    # real floor plan -- a doorway threshold where the flanking wall staggered
+    # by 2 columns, not just 1) only had its first cell absorbed, leaving the
+    # second still pinching. Running to an actual fixed point (loop until
+    # nothing new gets absorbed) was tried and rejected: with no depth limit,
+    # each newly-absorbed cell creates fresh dilation neighbours to consider
+    # next pass, and as long as a cell never touches the true exterior it
+    # keeps passing the safety check -- confirmed it will tunnel arbitrarily
+    # far through legitimate interior walls between unrelated rooms (7 real
+    # doors collapsed into 2 sprawling ones, 87s runtime). Two passes absorbs
+    # jogs up to 2 cells deep (everything seen in practice) without that
+    # runaway.
+    for _ in range(2):
+        door_mask = np.zeros_like(wall_mask)
+        for r, c in door_cells_set:
+            door_mask[r, c] = True
+        for r, c in zip(*np.where(dilate(door_mask))):
+            if not wall_mask[r, c] or unsafe[r, c]:
+                continue
+            wall_mask[r, c] = False
+            if int(outside_mask(wall_mask).sum()) > baseline_outside_count:
+                wall_mask[r, c] = True
+                continue
+            door_cells_set.add((r, c))
 
     return wall_mask, door_cells_set
 
