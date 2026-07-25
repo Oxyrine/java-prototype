@@ -403,8 +403,12 @@ def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, doo
     # back in as noise (the min_room step above) and carve_doorways has to invent a
     # fresh opening right next to it, the result is two adjacent carves of different
     # sizes -- fine for connectivity, but it renders as a lumpy, stepped opening/lintel
-    # instead of a clean doorframe. Snap each carved patch to its own bounding box
-    # (never shrinking it), as long as the box still respects the exterior guard.
+    # instead of a clean doorframe. Snap each carved patch to its own bounding box,
+    # but ONLY when that box's shorter side still fits within a real doorway's depth
+    # (max_thickness+1): a shorter side bigger than that means this component is
+    # actually a fusion of two carves from unrelated crossings (not stepped pieces of
+    # the same doorway), and boxing it would inflate a shallow opening into a deep,
+    # unrealistic tunnel -- worse than just leaving the original stepped shape.
     door_mask = np.zeros_like(wall_mask)
     for r, c in door_cells_set:
         door_mask[r, c] = True
@@ -412,6 +416,8 @@ def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, doo
     for label_id in range(len(door_sizes)):
         rs, cs = np.where(door_labels == label_id)
         r0, r1, c0, c1 = int(rs.min()), int(rs.max()), int(cs.min()), int(cs.max())
+        if min(r1 - r0 + 1, c1 - c0 + 1) > max_thickness + 1:
+            continue
         box_cells = [(r, c) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)]
         if any(unsafe[r, c] for r, c in box_cells):
             continue
@@ -568,7 +574,14 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
 
     cell_size = width_metres / cols_actual
     door_cells_wide = max(3, round(0.9 / cell_size))  # 0.9m minimum doorway width
-    max_thickness = max(3, cols_actual // 12)
+    # Real interior walls run ~0.1-0.3m thick. This bounds how deep a "doorway" is
+    # allowed to tunnel: cols_actual // 12 (the old value) scaled up to 8+ cells / 1m+
+    # on a 96-col grid, letting the carver burrow through an entire solid block (a
+    # stairwell, a merged furniture blob) and call it a doorway -- exactly the deep,
+    # narrow tunnel reported when walking through one. Measured: capping to a real
+    # wall's thickness still reaches 100% reachability on the test image, so that
+    # extra depth was never actually needed for connectivity.
+    max_thickness = max(2, round(0.3 / cell_size))
     min_room = max(8, cols_actual // 4)
     wall_mask, door_cells = carve_doorways(wall_mask, min_room, max_thickness, door_cells_wide)
 
