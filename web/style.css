@@ -1,0 +1,76 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font-family: sans-serif; }
+canvas { display: block; }
+
+#crosshair {
+  position: fixed; top: 50%; left: 50%;
+  width: 6px; height: 6px; margin: -3px 0 0 -3px;
+  border-radius: 50%; background: rgba(255,255,255,0.8);
+  pointer-events: none;
+}
+
+#overlay {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 22px;
+  background: rgba(0,0,0,0.6); color: #fff; text-align: center;
+}
+#overlay.hidden { display: none; }
+#startPrompt { cursor: pointer; }
+#startPrompt h1 { margin: 0 0 8px; }
+#startPrompt p { margin: 4px 0; opacity: 0.85; }
+
+#uploadPanel {
+  background: rgba(20,20,25,0.9); border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 10px; padding: 18px 22px; width: 300px;
+  font-size: 14px; cursor: default;
+}
+#uploadPanel h2 { margin: 0 0 12px; font-size: 19px; opacity: 0.9; }
+#uploadPanel label {
+  display: block; text-align: left; margin: 10px 0 4px; opacity: 0.85;
+}
+#uploadPanel input[type="file"],
+#uploadPanel input[type="number"] {
+  width: 100%; box-sizing: border-box; padding: 5px; font-size: 13px;
+}
+#uploadPanel button {
+  width: 100%; margin-top: 12px; padding: 8px; font-size: 14px;
+  cursor: pointer; border: none; border-radius: 5px;
+  background: #4a7fd6; color: #fff;
+}
+#uploadPanel button:disabled { opacity: 0.5; cursor: default; }
+#uploadStatus { min-height: 18px; margin: 10px 0 0; font-size: 13px; }
+#uploadStatus.error { color: #ff8a8a; }
+#uploadStatus.ok { color: #8aff9e; }
+#uploadStatus.warn { color: #ffd27a; }
+
+#savedLevelsRow { display: flex; gap: 6px; }
+#savedLevelSelect {
+  flex: 1; padding: 5px; font-size: 13px; box-sizing: border-box;
+}
+#savedLevelsRow button {
+  width: auto; margin-top: 0; padding: 5px 14px; font-size: 13px;
+  cursor: pointer; border: none; border-radius: 5px;
+  background: #4a7fd6; color: #fff;
+}
+#savedLevelsRow button:disabled { opacity: 0.5; cursor: default; }
+#loadLevelStatus { min-height: 16px; margin: 8px 0 0; font-size: 12px; }
+#loadLevelStatus.error { color: #ff8a8a; }
+#loadLevelStatus.ok { color: #8aff9e; }
+
+.warnNote {
+  font-size: 11px; opacity: 0.7; margin: 12px 0 10px;
+  padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.15);
+}
+
+#sensitivityRow {
+  display: flex; align-items: center; gap: 8px; margin-top: 16px;
+  padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.15);
+}
+#sensitivityRow input[type="range"] { flex: 1; }
+#sensitivityValue { width: 32px; text-align: right; opacity: 0.85; }
+
+#minimap {
+  position: fixed; right: 12px; bottom: 12px; z-index: 10;
+  background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 6px;
+}
