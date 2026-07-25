@@ -435,21 +435,34 @@ function overlapRange(lo, hi) {
   return [Math.floor(lo - 0.5) + 1, Math.ceil(hi + 0.5) - 1];
 }
 
+// Shrinks the tested radius by a hair below the player's real one. All level
+// geometry is exactly grid-aligned, so ordinary movement constantly produces
+// positions where (position +/- radius)/cellSize lands EXACTLY on an integer
+// or half-integer boundary -- confirmed via two separate live stuck-position
+// logs, at two different exact alignments, that overlapRange's strict overlap
+// test (correct as it is) can still flip a cell in or out of range from a
+// sub-millimetre difference at exactly these knife-edge positions, which
+// ordinary per-frame floating point noise crosses constantly. 1cm is far
+// below anything visible or gameplay-relevant, but reliably pushes the tested
+// edges off those exact rational boundaries.
+const COLLISION_EPSILON = 0.01;
+
 function collides(x, z) {
   if (!solidGrid) return false;
   const cellSize = level.cellSize;
   const rows = level.height;
+  const r = PLAYER_RADIUS - COLLISION_EPSILON;
 
-  const [colMin, colMax] = overlapRange((x - PLAYER_RADIUS) / cellSize, (x + PLAYER_RADIUS) / cellSize);
+  const [colMin, colMax] = overlapRange((x - r) / cellSize, (x + r) / cellSize);
   // z -> row is inverted (row = rows-1-z/cellSize), so compute the raw (pre-flip)
   // range first, then flip both ends -- flipping swaps which end is min/max.
-  const [rawRowMin, rawRowMax] = overlapRange((z - PLAYER_RADIUS) / cellSize, (z + PLAYER_RADIUS) / cellSize);
+  const [rawRowMin, rawRowMax] = overlapRange((z - r) / cellSize, (z + r) / cellSize);
   const rowMin = rows - 1 - rawRowMax;
   const rowMax = rows - 1 - rawRowMin;
 
-  for (let r = rowMin; r <= rowMax; r++) {
+  for (let rr = rowMin; rr <= rowMax; rr++) {
     for (let c = colMin; c <= colMax; c++) {
-      if (cellAt(r, c) === '1') return true;
+      if (cellAt(rr, c) === '1') return true;
     }
   }
   return false;
