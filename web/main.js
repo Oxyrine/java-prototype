@@ -283,7 +283,12 @@ const ROOM_PALETTE = [
   0x8a5a5a, 0x5a8a5a, 0x7a7a5a, 0x5a7a7a,
 ];
 
-function computeRoomColors(data) {
+// Set once by buildLevel(); the HUD and the minimap's current-room highlight both read
+// this same closure, so the room number on screen and the floor color underfoot are the
+// same index by construction and can never disagree.
+let roomIdOf = null;
+
+function computeRoomIds(data) {
   const rows = data.height, cols = data.width;
   const grid = data.grid;
   const idx = (r, c) => r * cols + c;
@@ -309,16 +314,19 @@ function computeRoomColors(data) {
     }
   }
 
-  return function roomColorOf(r, c) {
+  // Returns the room index rather than a color, so callers that want something other
+  // than a floor tile (the HUD's room label, the minimap's highlight) don't have to
+  // reverse a palette lookup. null = wall cell (no floor tile), -1 = orphan doorway.
+  return function lookupRoomId(r, c) {
     const cell = grid[r][c];
-    if (cell === '0') return ROOM_PALETTE[roomId[idx(r, c)] % ROOM_PALETTE.length];
+    if (cell === '0') return roomId[idx(r, c)];
     if (cell === '3') {
       for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
         const nr = r + dr, nc = c + dc;
         if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-        if (grid[nr][nc] === '0') return ROOM_PALETTE[roomId[idx(nr, nc)] % ROOM_PALETTE.length];
+        if (grid[nr][nc] === '0') return roomId[idx(nr, nc)];
       }
-      return 0x556655; // isolated doorway cell with no '0' neighbour -- shouldn't happen, safe fallback
+      return -1; // isolated doorway cell with no '0' neighbour -- shouldn't happen, safe fallback
     }
     return null; // wall cell, not floor
   };
@@ -464,14 +472,15 @@ function buildLevel(data) {
   // PlaneGeometry doesn't have, and skipping that produced black instead of white.
   // Grouping by color and reusing the exact addInstancedGroup pattern already
   // proven for walls/lintels above sidesteps the whole issue.
-  const roomColorOf = computeRoomColors(data);
+  roomIdOf = computeRoomIds(data);
   const floorTileGeometry = new THREE.PlaneGeometry(data.cellSize, data.cellSize);
   floorTileGeometry.rotateX(-Math.PI / 2);
   const floorCellsByColor = new Map();
   for (let r = 0; r < data.height; r++) {
     for (let c = 0; c < data.width; c++) {
-      const color = roomColorOf(r, c);
-      if (color === null) continue; // wall cell, no floor tile here
+      const id = roomIdOf(r, c);
+      if (id === null) continue; // wall cell, no floor tile here
+      const color = id < 0 ? 0x556655 : ROOM_PALETTE[id % ROOM_PALETTE.length];
       if (!floorCellsByColor.has(color)) floorCellsByColor.set(color, []);
       floorCellsByColor.get(color).push({
         x: c * data.cellSize,
@@ -623,6 +632,17 @@ function cellAt(row, col) {
   return cell === undefined ? '1' : cell;
 }
 
+// The grid cell the camera is standing in. Same inversion as collides(), just rounded to
+// a single cell -- used by the HUD's room label, the minimap's room highlight, and the
+// stuck diagnostic.
+function playerCell() {
+  const cellSize = level.cellSize;
+  return {
+    row: Math.round(level.height - 1 - camera.position.z / cellSize),
+    col: Math.round(camera.position.x / cellSize),
+  };
+}
+
 // Tests EVERY grid cell overlapping the player's [x-r,x+r] x [z-r,z+r] box, not
 // just the 4 corners. On a coarse grid (Phase 1's cellSize=1) 4 corners was
 // enough, but on a fine grid (a real floor plan's cellSize ~0.1m) the player's
@@ -690,7 +710,7 @@ function logStuckDiagnostic(x, z) {
   const rows = level.height;
   const col = x / cellSize;
   const rowF = rows - 1 - z / cellSize;
-  const c0 = Math.round(col), r0 = Math.round(rowF);
+  const { row: r0, col: c0 } = playerCell();
   let nearby = '';
   for (let r = r0 - 2; r <= r0 + 2; r++) {
     let line = '';
