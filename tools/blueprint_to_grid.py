@@ -612,8 +612,14 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     # just a cosmetic tight squeeze. Size the door around the player's own radius
     # (mirrors PLAYER_RADIUS in web/main.js) plus a full metre of margin, rather than
     # a bare real-world minimum that assumes perfect, lossless carving.
+    # The +1.0m version above still measured as "stuck" in direct hands-on testing
+    # despite passing every simulation (BFS reachability, per-frame movement at a
+    # range of approach angles) -- the discrepancy wasn't pinned down, so rather
+    # than keep tuning a narrow margin against a mismatch between simulation and
+    # the real browser, go wide enough that no plausible remaining subtlety
+    # (rounding, approach angle, corner deadlock) can matter.
     player_radius = min(0.25, cell_size * 1.5)
-    door_metres = max(0.9, player_radius * 2 + 1.0)
+    door_metres = max(1.2, player_radius * 2 + 1.5)
     door_cells_wide = max(3, round(door_metres / cell_size))
     # Real interior walls run ~0.1-0.3m thick. This bounds how deep a "doorway" is
     # allowed to tunnel: cols_actual // 12 (the old value) scaled up to 8+ cells / 1m+
