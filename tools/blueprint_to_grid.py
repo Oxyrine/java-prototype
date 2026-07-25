@@ -19,12 +19,15 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-# Calibrated against two real conversions (see convert()'s sanity check): a real
-# apartment plan needed 3 doorway openings / 1.6% of its interior; a section/elevation
-# view mistakenly uploaded in its place needed 11 openings / 10.2%. These sit well
-# above the real case and well below the bad one.
-MAX_DOORWAY_OPENINGS = 8
-MAX_DOOR_CELL_FRACTION = 0.05
+# Calibrated against three real conversions (see convert()'s sanity check): a simple
+# 3-room apartment plan needed 3 doorway openings / 1.6% of its interior; a genuinely
+# complex real unit (3 bed/2 bath plus walk-in closets, laundry, balcony -- more small
+# rooms means more doors relative to a smaller interior even when fully legitimate)
+# needed 7 openings / 6%; a section/elevation view mistakenly uploaded in its place
+# needed 11 openings / 10.2%. These sit with margin above the legitimate cases and
+# below the bad one.
+MAX_DOORWAY_OPENINGS = 9
+MAX_DOOR_CELL_FRACTION = 0.08
 
 
 # ---------------------------------------------------------------------------
@@ -395,10 +398,18 @@ def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, doo
     if num_regions <= 1:
         return wall_mask, set()
 
-    # A carve is unsafe if it (or its 8-neighbourhood) touches the outside --
-    # that would punch a hole straight through the exterior wall instead of
-    # connecting two interior rooms.
-    unsafe = dilate(outside)
+    # A carve is unsafe if it comes within max_thickness of the outside -- a
+    # single 1-cell dilation isn't enough of a buffer: a candidate can tunnel
+    # up to max_thickness cells deep, so its far end can land at or past the
+    # true exterior line while still never touching a 1-cell-wide guard zone.
+    # Confirmed on a dense real floor plan (many small rooms packed near the
+    # perimeter, max_thickness=4): a 1-cell guard let carving breach the
+    # exterior, merging outside_mask with the entire interior afterward.
+    # Dilating by max_thickness instead guarantees no candidate's full depth
+    # can ever reach true outside.
+    unsafe = outside
+    for _ in range(max_thickness):
+        unsafe = dilate(unsafe)
 
     rows, cols = wall_mask.shape
     candidates = []  # (thickness, region_a, region_b, r, c, dr, dc)
@@ -428,6 +439,7 @@ def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, doo
 
     door_cells_set = set()
     half = door_cells // 2
+    baseline_outside_count = int(outside.sum())
     for thickness, region_a, region_b, r, c, dr, dc in candidates:
         root_a, root_b = find(region_a), find(region_b)
         if root_a == root_b:
@@ -441,10 +453,27 @@ def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, doo
         ]
         if any(not (0 <= fr < rows and 0 <= fc < cols) or unsafe[fr, fc] for fr, fc in footprint):
             continue
-        parent[root_a] = root_b
-        for fr, fc in footprint:
+
+        # The static unsafe buffer above rejects candidates whose OWN footprint
+        # comes near the exterior, but not indirect breaches: removing this
+        # footprint's wall cells can occasionally open a path to the true
+        # outside through geometry the footprint itself never touches (a
+        # region that was already just barely short of connecting to outside
+        # through a separate, pre-existing thin gap). Confirmed on a dense
+        # real floor plan: a static buffer alone still let outside_mask
+        # swallow the entire interior after carving. Verify directly instead
+        # of guessing at buffer sizes -- tentatively carve, recompute
+        # outside_mask, and revert if it grew at all.
+        new_cells = [cell for cell in footprint if cell not in door_cells_set]
+        for fr, fc in new_cells:
             wall_mask[fr, fc] = False
-            door_cells_set.add((fr, fc))
+        if int(outside_mask(wall_mask).sum()) > baseline_outside_count:
+            for fr, fc in new_cells:
+                wall_mask[fr, fc] = True
+            continue
+
+        parent[root_a] = root_b
+        door_cells_set.update(new_cells)
 
     # Regularize into clean rectangles. When a too-small doorway remnant gets filled
     # back in as noise (the min_room step above) and carve_doorways has to invent a
@@ -468,9 +497,16 @@ def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, doo
         box_cells = [(r, c) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)]
         if any(unsafe[r, c] for r, c in box_cells):
             continue
-        for r, c in box_cells:
+        # Same indirect-breach risk as the main carve loop above -- verify
+        # dynamically rather than trusting the static buffer alone.
+        new_cells = [cell for cell in box_cells if cell not in door_cells_set]
+        for r, c in new_cells:
             wall_mask[r, c] = False
-            door_cells_set.add((r, c))
+        if int(outside_mask(wall_mask).sum()) > baseline_outside_count:
+            for r, c in new_cells:
+                wall_mask[r, c] = True
+            continue
+        door_cells_set.update(new_cells)
 
     # Absorb 1-2 cell jogs in the walls immediately flanking a doorway -- at this
     # source resolution (a couple px/cell) the same physical wall can land in a
@@ -486,9 +522,15 @@ def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, doo
     for r, c in door_cells_set:
         door_mask[r, c] = True
     for r, c in zip(*np.where(dilate(door_mask))):
-        if wall_mask[r, c] and not unsafe[r, c]:
-            wall_mask[r, c] = False
-            door_cells_set.add((r, c))
+        if not wall_mask[r, c] or unsafe[r, c]:
+            continue
+        # Same indirect-breach risk as above -- verify each cell individually
+        # rather than trusting the static buffer alone.
+        wall_mask[r, c] = False
+        if int(outside_mask(wall_mask).sum()) > baseline_outside_count:
+            wall_mask[r, c] = True
+            continue
+        door_cells_set.add((r, c))
 
     return wall_mask, door_cells_set
 
