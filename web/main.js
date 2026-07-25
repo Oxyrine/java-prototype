@@ -19,6 +19,9 @@ const DOOR_OPEN_ANGLE = Math.PI / 2; // 90 degrees -- must be fully flat against
 // have no collision: anything less leaves the leaf swung diagonally across the doorway's walking line,
 // so the player walks straight into (and the camera clips through) the leaf mesh
 const DOOR_SWING_RATE = 6.0; // 1/s, exponential smoothing -- same pattern as camera rotation smoothing
+// Total reveal between leaf and jambs, 5mm a side. Enough to keep the leaf's end faces
+// off the jamb faces (coplanar surfaces z-fight), small enough to read as a shut door.
+const DOOR_LEAF_CLEARANCE = 0.01;
 
 // ---------- scene ----------
 const scene = new THREE.Scene();
@@ -489,15 +492,26 @@ function buildDoors(data) {
     const axisIsX = worldWidthX >= worldWidthZ; // the doorway's long axis, i.e. the
     // direction a real door's width would run along (crossing/walking-through
     // direction is the other, shorter axis)
-    const leafWidth = Math.min(0.9, (axisIsX ? worldWidthX : worldWidthZ) * 0.85);
+    // A leaf fills its opening. Earlier this was min(0.9, span * 0.85), which left every
+    // door visibly short: the cap bound on all seven doorways of a real plan (openings run
+    // 1.13-1.28m, so each leaf sat 7-13 inches narrow, covering only 71-80% of its hole).
+    // Only a hairline reveal remains, and it is split evenly between the two jambs so the
+    // leaf is centred rather than shoved against one side.
+    const openingWidth = axisIsX ? worldWidthX : worldWidthZ;
+    const leafWidth = openingWidth - DOOR_LEAF_CLEARANCE;
     const leafThickness = Math.max(0.04, cellSize * 0.6);
 
     const centerCol = (c0 + c1) / 2;
     const centerRow = (r0 + r1) / 2;
-    // Hinge at one edge of the opening along its long axis; row->z is inverted
-    // (z = (rows-1-row)*cellSize), so the "r0" edge is the LARGER z, not smaller.
-    const hingeX = axisIsX ? c0 * cellSize : centerCol * cellSize;
-    const hingeZ = axisIsX ? (data.height - 1 - centerRow) * cellSize : (data.height - 1 - r0) * cellSize;
+    // Hinge on the opening's actual JAMB FACE, not the centre of the edge cell. Cell c
+    // spans [(c-0.5)*cellSize, (c+0.5)*cellSize] (see the floor tiles in buildLevel), so
+    // c0*cellSize is half a cell inside the hole -- the old value, and another inch and a
+    // half of gap on top of the short leaf. Row->z is inverted (z = (rows-1-row)*cellSize),
+    // so the r0 edge is the LARGER z and its outer face is at +0.5 cells, not -0.5.
+    const hingeX = axisIsX ? (c0 - 0.5) * cellSize : centerCol * cellSize;
+    const hingeZ = axisIsX
+      ? (data.height - 1 - centerRow) * cellSize
+      : (data.height - 1 - r0 + 0.5) * cellSize;
     const baseRotationY = axisIsX ? 0 : Math.PI / 2;
 
     const pivot = new THREE.Object3D();
@@ -506,7 +520,8 @@ function buildDoors(data) {
 
     const leaf = new THREE.Mesh(leafGeometry, leafMaterial);
     leaf.scale.set(leafWidth, DOOR_HEIGHT, leafThickness);
-    leaf.position.set(leafWidth / 2, DOOR_HEIGHT / 2, 0); // extends outward from the hinge
+    // Extends outward from the hinge, offset by half the reveal so the gap is symmetric.
+    leaf.position.set(DOOR_LEAF_CLEARANCE / 2 + leafWidth / 2, DOOR_HEIGHT / 2, 0);
     pivot.add(leaf);
 
     doors.push({
