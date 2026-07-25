@@ -70,6 +70,18 @@ def convert():
     except ValueError:
         return jsonify(success=False, error="Building width must be a positive number."), 400
 
+    # Architectural drawings are dimensioned in millimetres, so it is very easy to read
+    # "12123" off the plan and type it into a field labelled metres -- which silently
+    # builds a 12 km world (every metre-based constant in main.js, fog/eye height/move
+    # speed, is then meaningless). No single-floor dwelling is 200 m across, so reject
+    # rather than auto-divide: an explicit error teaches the units, an auto-divide would
+    # be wrong on a genuinely large building.
+    if width_metres > 200:
+        return jsonify(success=False, error=(
+            f"Building width {width_metres:g} m is implausible for a floor plan. "
+            "Architectural drawings are dimensioned in millimetres -- if you read this "
+            f"off the drawing, enter {width_metres / 1000:g} instead.")), 400
+
     BLUEPRINTS_DIR.mkdir(parents=True, exist_ok=True)
     upload_path = BLUEPRINTS_DIR / f"uploaded{suffix}"
     file.save(upload_path)
