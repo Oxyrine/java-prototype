@@ -189,6 +189,50 @@ body.locked #crosshair { opacity: .75; }
   opacity: .4; cursor: default; box-shadow: none;
 }
 
+/* ---------- conversion progress ---------- */
+#convertProgress { margin-top: 14px; }
+#convertProgress[hidden] { display: none; }
+
+/* Indeterminate barber pole: it never terminates, so it cannot be misread as a
+   percentage that has stalled. */
+#scanTrack {
+  position: relative; height: 6px; overflow: hidden;
+  background:
+    repeating-linear-gradient(90deg,
+      rgba(79,195,247,.16) 0 1px, transparent 1px 8px),
+    rgba(10,25,41,.7);
+  border: 1px solid rgba(79,195,247,.25);
+}
+#scanLine {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 45%;
+  background: linear-gradient(90deg, transparent, var(--bp-line), transparent);
+  animation: scan 1.6s linear infinite;
+}
+@keyframes scan {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(322%); } /* 100/45 of the track, so it fully clears */
+}
+
+#convertMeta {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-top: 8px; font-family: var(--bp-mono); font-size: 11px;
+  letter-spacing: .12em; text-transform: uppercase;
+}
+#convertStage { color: var(--bp-glow); }
+#convertElapsed { color: rgba(224,242,254,.55); }
+
+#stageLegend {
+  display: flex; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none;
+  font-size: 9px; letter-spacing: .06em; text-transform: uppercase;
+}
+#stageLegend li {
+  flex: 1; padding: 4px 2px; text-align: center;
+  color: rgba(224,242,254,.35);
+  border-top: 1px solid rgba(79,195,247,.18);
+  transition: color .3s ease, border-color .3s ease;
+}
+#stageLegend li.active { color: var(--bp-glow); border-top-color: var(--bp-line); }
+
 #uploadStatus { min-height: 18px; margin: 10px 0 0; font-size: 12px; font-family: var(--bp-mono); }
 #uploadStatus.error { color: #ff8a8a; }
 #uploadStatus.ok { color: #8aff9e; }

@@ -39,6 +39,21 @@
 
       <button type="submit" id="uploadButton">Upload &amp; Build</button>
     </form>
+
+    <!-- /api/convert is one blocking POST with no streaming, so a percentage would be
+         invented. Everything here is either honest (the elapsed clock) or obviously
+         indeterminate (a scan line and a stage legend that both loop forever). -->
+    <div id="convertProgress" hidden>
+      <div id="scanTrack"><div id="scanLine"></div></div>
+      <div id="convertMeta">
+        <span id="convertStage">UPLOAD</span>
+        <span id="convertElapsed">0:00</span>
+      </div>
+      <ol id="stageLegend">
+        <li>Upload</li><li>Detect walls</li><li>Carve doorways</li><li>Build level</li>
+      </ol>
+    </div>
+
     <p id="uploadStatus"></p>
 
     <div id="sensitivityRow">

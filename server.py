@@ -77,10 +77,15 @@ def convert():
     # rather than auto-divide: an explicit error teaches the units, an auto-divide would
     # be wrong on a genuinely large building.
     if width_metres > 200:
-        return jsonify(success=False, error=(
-            f"Building width {width_metres:g} m is implausible for a floor plan. "
-            "Architectural drawings are dimensioned in millimetres -- if you read this "
-            f"off the drawing, enter {width_metres / 1000:g} instead.")), 400
+        message = f"Building width {width_metres:g} m is implausible for a floor plan."
+        # Only suggest the millimetre reading when it actually lands on a plausible
+        # building; at, say, 201 "enter 0.201 instead" would be worse than no advice.
+        if width_metres >= 1000:
+            message += (" Architectural drawings are dimensioned in millimetres -- if you "
+                        f"read this off the drawing, enter {width_metres / 1000:g} instead.")
+        else:
+            message += " Enter the width in metres (a house is typically 8-20)."
+        return jsonify(success=False, error=message), 400
 
     BLUEPRINTS_DIR.mkdir(parents=True, exist_ok=True)
     upload_path = BLUEPRINTS_DIR / f"uploaded{suffix}"

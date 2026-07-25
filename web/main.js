@@ -217,11 +217,52 @@ const uploadStatus = document.getElementById('uploadStatus');
 // or the sensitivity row's padding would accidentally engage pointer lock mid-interaction.
 uploadPanel.addEventListener('click', (e) => e.stopPropagation());
 
+// ---------- conversion progress ----------
+// /api/convert is a single blocking POST with no streaming, so real progress is
+// impossible and a bar that parks at 80% is worse than showing nothing. Only one number
+// appears here and it is measured, not estimated: the elapsed clock. The scan line and
+// the stage highlight both loop forever, which reads as "still working, duration unknown"
+// and cannot be mistaken for progress toward a finish.
+//
+// The four stages are the real pipeline, in order -- blueprint_to_grid.convert() then
+// build_level.run_java() in server.py -- so the loop teaches what is actually happening.
+const convertProgress = document.getElementById('convertProgress');
+const convertStage = document.getElementById('convertStage');
+const convertElapsed = document.getElementById('convertElapsed');
+const stageLegend = [...document.querySelectorAll('#stageLegend li')];
+let convertTimer = null;
+
+function startConvertProgress() {
+  const startedAt = Date.now();
+  convertProgress.hidden = false;
+  let step = -1;
+  const tick = () => {
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    convertElapsed.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    const next = Math.floor(seconds / 2) % stageLegend.length;
+    if (next !== step) {
+      step = next;
+      stageLegend.forEach((li, i) => li.classList.toggle('active', i === step));
+      convertStage.textContent = stageLegend[step].textContent.toUpperCase();
+    }
+  };
+  tick();
+  convertTimer = setInterval(tick, 250);
+}
+
+function stopConvertProgress() {
+  clearInterval(convertTimer);
+  convertTimer = null;
+  convertProgress.hidden = true;
+  stageLegend.forEach((li) => li.classList.remove('active'));
+}
+
 uploadForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   uploadButton.disabled = true;
   uploadStatus.className = '';
-  uploadStatus.textContent = 'Converting blueprint… this can take a few seconds.';
+  uploadStatus.textContent = '';
+  startConvertProgress();
 
   try {
     const formData = new FormData(uploadForm);
@@ -254,6 +295,11 @@ uploadForm.addEventListener('submit', async (e) => {
     uploadStatus.className = 'error';
     uploadStatus.textContent = String(err.message || err);
     uploadButton.disabled = false;
+  } finally {
+    // All three exit paths above write the final status text, and two of them then start
+    // a reload timer. Without this the 250ms tick would keep running and overwrite that
+    // text a moment after it appeared.
+    stopConvertProgress();
   }
 });
 
