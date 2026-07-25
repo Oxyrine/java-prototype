@@ -84,13 +84,13 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("image", type=Path, help="Input blueprint image (PNG/JPG/PDF)")
     parser.add_argument("--out", default="house", help="Output base name for the grid (default: house)")
-    parser.add_argument("--cols", type=int, default=96)
+    parser.add_argument("--cols", type=int, default=None,
+                         help="Grid columns (default: auto-selected from source resolution)")
     parser.add_argument("--fill", type=float, default=0.12)
     parser.add_argument("--width-metres", type=float, default=12.0)
     parser.add_argument("--wall-height", type=float, default=2.5)
     parser.add_argument("--dpi", type=int, default=200)
     parser.add_argument("--invert", action="store_true")
-    parser.add_argument("--no-close", dest="do_close", action="store_false")
     parser.add_argument("--min-region", type=int, default=6)
     parser.add_argument("--no-seal", dest="do_seal", action="store_false")
     parser.add_argument("--keep-all-components", dest="keep_largest_only", action="store_false")
@@ -99,7 +99,7 @@ def main():
     print("=== Stage 1: image -> grid (Python) ===")
     out_txt, cell_size, wall_height, _reachable, _walls = blueprint_to_grid.convert(
         args.image, args.out, args.cols, args.fill, args.width_metres,
-        args.wall_height, args.dpi, args.invert, args.do_close, args.min_region,
+        args.wall_height, args.dpi, args.invert, args.min_region,
         args.do_seal, args.keep_largest_only)
 
     print()

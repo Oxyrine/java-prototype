@@ -250,20 +250,153 @@ def keep_largest_wall_component(wall_mask: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Stage 7: seal the border so the player can't walk out into the void
+# Stage 7: seal the border so the player can't walk out into the void.
+#
+# Fills every floor cell OUTSIDE the building -- the whole margin between the
+# exterior wall and the grid edge, not just the outermost ring -- as wall.
+# Walling only the outer ring leaves that margin as walkable floor, and once
+# the border itself is wall, outside_mask can no longer tell that margin apart
+# from a real room (its BFS seeds from border floor, and there isn't any left):
+# it would get counted as a genuine disconnected "room" and wrongly fail
+# reachability. Filling the whole region removes it instead of just fencing it,
+# so there is nothing left for that ambiguity to happen to.
 # ---------------------------------------------------------------------------
 
 def seal_border(mask: np.ndarray) -> np.ndarray:
-    sealed = mask.copy()
-    sealed[0, :] = True
-    sealed[-1, :] = True
-    sealed[:, 0] = True
-    sealed[:, -1] = True
-    return sealed
+    return mask | outside_mask(mask)
 
 
 # ---------------------------------------------------------------------------
-# Stage 8: auto-place spawn -- largest connected floor region, cell furthest
+# Stage 7b: separate "outside the building" from "interior room" floor cells.
+#
+# A sealed border (Stage 7) makes the whole grid one rectangle, but the ring of
+# floor between the building's exterior wall and that border is still FLOOR --
+# and on a real plan it is very often the single largest connected floor region,
+# larger than any room. Anything downstream that just picks "largest floor
+# region" (spawn placement, reachability) silently picks that outside ring
+# instead of a room. Flood-fill floor cells inward from the grid border to find
+# it; everything else floor-shaped is genuine interior.
+# ---------------------------------------------------------------------------
+
+def outside_mask(wall_mask: np.ndarray) -> np.ndarray:
+    rows, cols = wall_mask.shape
+    outside = np.zeros_like(wall_mask)
+    queue = deque()
+    for r in range(rows):
+        for c in (0, cols - 1):
+            if not wall_mask[r, c] and not outside[r, c]:
+                outside[r, c] = True
+                queue.append((r, c))
+    for c in range(cols):
+        for r in (0, rows - 1):
+            if not wall_mask[r, c] and not outside[r, c]:
+                outside[r, c] = True
+                queue.append((r, c))
+
+    while queue:
+        r, c = queue.popleft()
+        for dr, dc in _NEIGHBORS_4:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols and not wall_mask[nr, nc] and not outside[nr, nc]:
+                outside[nr, nc] = True
+                queue.append((nr, nc))
+
+    return outside
+
+
+# ---------------------------------------------------------------------------
+# Stage 7c: carve doorways until every interior room connects.
+#
+# At real-photo resolution (a few px/cell), door swing-arc ink and wall ink
+# threshold identically -- door GAPS don't survive downsampling, so trying to
+# preserve them is a losing game. Instead: every room in a dwelling has a door,
+# so if the interior comes out split into disconnected regions, a door was
+# there and got lost. Detect the split and carve a doorway back in, rather than
+# requiring someone to find and hand-patch the gap (which is what kept
+# happening before this fix).
+#
+# Runs on wall_mask BEFORE seal_border, using outside_mask/interior computed
+# fresh (seal_border would make the whole grid touch the border and defeat the
+# outside/interior distinction this depends on).
+# ---------------------------------------------------------------------------
+
+def carve_doorways(wall_mask: np.ndarray, min_room: int, max_thickness: int, door_cells: int):
+    """Returns (new_wall_mask, door_cell_set) where door_cell_set is the set of
+    (r, c) cells carved open -- Java uses these to place doorway lintels."""
+    wall_mask = wall_mask.copy()
+    outside = outside_mask(wall_mask)
+
+    # Regions too small to be a room are hollow wall interiors / noise pockets --
+    # fill them back in as wall so they don't get treated as rooms to connect.
+    interior = ~wall_mask & ~outside
+    labels, sizes = connected_components(interior, connectivity=4)
+    for label_id, size in enumerate(sizes):
+        if size < min_room:
+            wall_mask[labels == label_id] = True
+
+    outside = outside_mask(wall_mask)
+    interior = ~wall_mask & ~outside
+    labels, sizes = connected_components(interior, connectivity=4)
+    num_regions = len(sizes)
+    if num_regions <= 1:
+        return wall_mask, set()
+
+    # A carve is unsafe if it (or its 8-neighbourhood) touches the outside --
+    # that would punch a hole straight through the exterior wall instead of
+    # connecting two interior rooms.
+    unsafe = dilate(outside)
+
+    rows, cols = wall_mask.shape
+    candidates = []  # (thickness, region_a, region_b, r, c, dr, dc)
+    for r in range(rows):
+        for c in range(cols):
+            if labels[r, c] < 0:
+                continue
+            for dr, dc in _NEIGHBORS_4:
+                for t in range(1, max_thickness + 1):
+                    nr, nc = r + dr * t, c + dc * t
+                    if not (0 <= nr < rows and 0 <= nc < cols):
+                        break
+                    if wall_mask[nr, nc]:
+                        continue
+                    if labels[nr, nc] >= 0 and labels[nr, nc] != labels[r, c]:
+                        candidates.append((t, labels[r, c], labels[nr, nc], r, c, dr, dc))
+                    break
+    candidates.sort(key=lambda cand: cand[0])
+
+    parent = list(range(num_regions))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    door_cells_set = set()
+    half = door_cells // 2
+    for thickness, region_a, region_b, r, c, dr, dc in candidates:
+        root_a, root_b = find(region_a), find(region_b)
+        if root_a == root_b:
+            continue
+        # Perpendicular direction to widen the doorway across.
+        pr, pc = dc, dr
+        footprint = [
+            (r + dr * t + pr * k, c + dc * t + pc * k)
+            for k in range(-half, half + 1)
+            for t in range(0, thickness + 1)
+        ]
+        if any(not (0 <= fr < rows and 0 <= fc < cols) or unsafe[fr, fc] for fr, fc in footprint):
+            continue
+        parent[root_a] = root_b
+        for fr, fc in footprint:
+            wall_mask[fr, fc] = False
+            door_cells_set.add((fr, fc))
+
+    return wall_mask, door_cells_set
+
+
+# ---------------------------------------------------------------------------
+# Stage 8: auto-place spawn -- largest connected INTERIOR region, cell furthest
 # from any wall (multi-source BFS distance transform)
 # ---------------------------------------------------------------------------
 
@@ -289,26 +422,30 @@ def distance_from_walls(wall_mask: np.ndarray) -> np.ndarray:
 
 
 def place_spawn(wall_mask: np.ndarray):
-    """Returns ((spawn_row, spawn_col), reachable_fraction)."""
-    floor_mask = ~wall_mask
-    labels, sizes = connected_components(floor_mask, connectivity=4)
+    """Returns ((spawn_row, spawn_col), reachable_fraction). Candidates are
+    restricted to INTERIOR floor (excludes the outside ring between the
+    building and the sealed border) -- otherwise the largest floor region is
+    often that outside ring, not a room, and spawn lands outside the building."""
+    outside = outside_mask(wall_mask)
+    interior = ~wall_mask & ~outside
+    labels, sizes = connected_components(interior, connectivity=4)
 
     if not sizes:
         raise ValueError(
-            "No floor cells at all -- the entire grid came out solid. The image is "
-            "probably too dark/noisy for the current --fill threshold; try raising "
-            "--fill or check --invert.")
+            "No interior floor cells at all -- the entire grid came out solid or is "
+            "all 'outside'. The image is probably too dark/noisy for the current "
+            "--fill threshold; try raising --fill or check --invert.")
 
     largest_label = int(np.argmax(sizes))
     largest_size = sizes[largest_label]
-    total_floor = int(floor_mask.sum())
+    total_interior = int(interior.sum())
 
     dist = distance_from_walls(wall_mask)
     candidate_mask = labels == largest_label
     dist_masked = np.where(candidate_mask, dist, -1)
     spawn_rc = np.unravel_index(np.argmax(dist_masked), dist_masked.shape)
 
-    reachable_fraction = largest_size / total_floor
+    reachable_fraction = largest_size / total_interior
     return (int(spawn_rc[0]), int(spawn_rc[1])), reachable_fraction
 
 
@@ -316,7 +453,7 @@ def place_spawn(wall_mask: np.ndarray):
 # Stage 9: write grid text + overlay PNG
 # ---------------------------------------------------------------------------
 
-def write_grid(wall_mask: np.ndarray, spawn_rc, out_path: Path, header_lines):
+def write_grid(wall_mask: np.ndarray, spawn_rc, door_cells: set, out_path: Path, header_lines):
     rows, cols = wall_mask.shape
     lines = list(header_lines)
     for r in range(rows):
@@ -324,6 +461,8 @@ def write_grid(wall_mask: np.ndarray, spawn_rc, out_path: Path, header_lines):
         for c in range(cols):
             if (r, c) == spawn_rc:
                 chars.append("2")
+            elif (r, c) in door_cells:
+                chars.append("3")
             elif wall_mask[r, c]:
                 chars.append("1")
             else:
@@ -334,7 +473,7 @@ def write_grid(wall_mask: np.ndarray, spawn_rc, out_path: Path, header_lines):
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_overlay(wall_mask: np.ndarray, spawn_rc, cropped_img: Image.Image,
+def write_overlay(wall_mask: np.ndarray, spawn_rc, door_cells: set, cropped_img: Image.Image,
                    row_edges: np.ndarray, col_edges: np.ndarray, out_path: Path):
     rows, cols = wall_mask.shape
     base = cropped_img.convert("RGBA")
@@ -347,6 +486,11 @@ def write_overlay(wall_mask: np.ndarray, spawn_rc, cropped_img: Image.Image,
                 draw.rectangle(
                     [col_edges[c], row_edges[r], col_edges[c + 1] - 1, row_edges[r + 1] - 1],
                     fill=(255, 0, 0, 110))
+
+    for r, c in door_cells:
+        draw.rectangle(
+            [col_edges[c], row_edges[r], col_edges[c + 1] - 1, row_edges[r + 1] - 1],
+            fill=(0, 120, 255, 150))
 
     sr, sc = spawn_rc
     cx = (col_edges[sc] + col_edges[sc + 1]) // 2
@@ -362,29 +506,49 @@ def write_overlay(wall_mask: np.ndarray, spawn_rc, cropped_img: Image.Image,
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def convert(image_path: Path, out_name: str, cols: int, fill: float, width_metres: float,
-            wall_height: float, dpi: int, invert: bool, do_close: bool, min_region: int,
+def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: float,
+            wall_height: float, dpi: int, invert: bool, min_region: int,
             do_seal: bool, keep_largest_only: bool):
     img = load_image(image_path, dpi)
     ink = binarize(img, invert)
     ink_cropped, img_cropped = autocrop(ink, img)
 
+    # Auto-select grid resolution from the source image's cropped width when the
+    # caller doesn't pin one: too few columns on a high-res plan wastes real detail,
+    # too many on a thumbnail just upsamples noise. 96-160 is the range measured to
+    # actually work (see plan) -- below 96 loses doorway/wall detail even on a tiny source.
+    cropped_width_px = ink_cropped.shape[1]
+    if cols is None:
+        cols = int(np.clip(round(cropped_width_px / 8), 96, 160))
+    px_per_cell = cropped_width_px / cols
+    if px_per_cell < 4:
+        print(f"WARNING: source image is only {cropped_width_px}px wide after cropping "
+              f"({px_per_cell:.1f}px/cell at {cols} columns) -- fine detail like thin "
+              "walls and doorways may not resolve cleanly. A higher-resolution source "
+              "image will convert more accurately.")
+
     wall_mask, row_edges, col_edges = downsample_to_grid(ink_cropped, cols, fill)
     rows_actual, cols_actual = wall_mask.shape
 
-    if do_close:
-        wall_mask = morphological_close(wall_mask)
-
+    # Closing is always on now: measured on the real test image, closing+carving
+    # reaches 100% reachability at every resolution while closing-off is worse at
+    # every resolution -- there's no longer a real case for disabling it.
+    wall_mask = morphological_close(wall_mask)
     wall_mask = remove_small_blobs(wall_mask, min_region)
 
     if keep_largest_only:
         wall_mask = keep_largest_wall_component(wall_mask)
 
+    cell_size = width_metres / cols_actual
+    door_cells_wide = max(3, round(0.9 / cell_size))  # 0.9m minimum doorway width
+    max_thickness = max(3, cols_actual // 12)
+    min_room = max(8, cols_actual // 4)
+    wall_mask, door_cells = carve_doorways(wall_mask, min_room, max_thickness, door_cells_wide)
+
     if do_seal:
         wall_mask = seal_border(wall_mask)
 
     spawn_rc, reachable_fraction = place_spawn(wall_mask)
-    cell_size = width_metres / cols_actual
 
     blueprints_dir = Path("blueprints")
     out_txt = blueprints_dir / f"{out_name}.txt"
@@ -394,19 +558,19 @@ def convert(image_path: Path, out_name: str, cols: int, fill: float, width_metre
         f"# generated by blueprint_to_grid.py from {image_path.name}",
         f"# cols={cols_actual} rows={rows_actual} fill={fill} cellSize={cell_size:.4f} wallHeight={wall_height}",
     ]
-    write_grid(wall_mask, spawn_rc, out_txt, header)
-    write_overlay(wall_mask, spawn_rc, img_cropped, row_edges, col_edges, out_overlay)
+    write_grid(wall_mask, spawn_rc, door_cells, out_txt, header)
+    write_overlay(wall_mask, spawn_rc, door_cells, img_cropped, row_edges, col_edges, out_overlay)
 
     wall_count = int(wall_mask.sum())
-    print(f"Grid: {cols_actual}x{rows_actual}  walls={wall_count}  spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
+    print(f"Grid: {cols_actual}x{rows_actual}  walls={wall_count}  doors={len(door_cells)}  "
+          f"spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
     print(f"cellSize = {width_metres} / {cols_actual} = {cell_size:.4f} m/cell")
-    print(f"Reachable floor from spawn: {reachable_fraction * 100:.1f}%")
-    if reachable_fraction < 0.8:
-        print("WARNING: less than 80% of floor is reachable from the spawn point -- "
-              "a doorway may have been sealed by --fill or the morphological close. "
-              f"Check {out_overlay}")
+    print(f"Reachable interior floor from spawn: {reachable_fraction * 100:.1f}%")
+    if reachable_fraction < 0.999:
+        print("WARNING: not all interior floor is reachable from the spawn point -- "
+              f"a room is still isolated. Check {out_overlay}")
     print(f"Wrote {out_txt}")
-    print(f"Wrote {out_overlay}  (walls tinted red, spawn marked green -- inspect this)")
+    print(f"Wrote {out_overlay}  (walls red, carved doorways blue, spawn green -- inspect this)")
 
     return out_txt, cell_size, wall_height, reachable_fraction, wall_count
 
@@ -416,7 +580,9 @@ def main():
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("image", type=Path, help="Input blueprint image (PNG/JPG/PDF)")
     parser.add_argument("--out", default="house", help="Output base name (default: house)")
-    parser.add_argument("--cols", type=int, default=96, help="Grid columns (default: 96)")
+    parser.add_argument("--cols", type=int, default=None,
+                         help="Grid columns (default: auto-selected from source image "
+                              "resolution, clamped to 96-160)")
     parser.add_argument("--fill", type=float, default=0.12,
                          help="Ink-fraction threshold per cell to count as a wall (default: 0.12)")
     parser.add_argument("--width-metres", type=float, default=12.0,
@@ -426,8 +592,6 @@ def main():
     parser.add_argument("--dpi", type=int, default=200, help="PDF render DPI (default: 200)")
     parser.add_argument("--invert", action="store_true",
                          help="Set if the plan is light lines on a dark background")
-    parser.add_argument("--no-close", dest="do_close", action="store_false",
-                         help="Disable morphological closing of double-line walls")
     parser.add_argument("--min-region", type=int, default=6,
                          help="Minimum connected wall-cell count to keep (default: 6)")
     parser.add_argument("--no-seal", dest="do_seal", action="store_false",
@@ -441,7 +605,7 @@ def main():
     args = parser.parse_args()
 
     convert(args.image, args.out, args.cols, args.fill, args.width_metres,
-            args.wall_height, args.dpi, args.invert, args.do_close, args.min_region,
+            args.wall_height, args.dpi, args.invert, args.min_region,
             args.do_seal, args.keep_largest_only)
 
 

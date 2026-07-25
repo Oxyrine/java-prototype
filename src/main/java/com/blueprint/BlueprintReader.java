@@ -50,9 +50,10 @@ public class BlueprintReader {
             char[] chars = line.toCharArray();
             for (int col = 0; col < chars.length; col++) {
                 char c = chars[col];
-                if (c != '1' && c != '0' && c != '2') {
+                if (c != '1' && c != '0' && c != '2' && c != '3') {
                     throw new BlueprintFormatException(String.format(
-                            "Unrecognised character '%c' at row %d, col %d. Only '1' (wall), '0' (floor), '2' (spawn) are allowed.",
+                            "Unrecognised character '%c' at row %d, col %d. Only '1' (wall), '0' (floor), "
+                                    + "'2' (spawn), '3' (doorway) are allowed.",
                             c, row, col));
                 }
             }
