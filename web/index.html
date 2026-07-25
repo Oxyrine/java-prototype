@@ -9,9 +9,12 @@
 
 <canvas id="minimap" width="180" height="180"></canvas>
 <div id="overlay">
+  <!-- Explicit ids: main.js writes the level-load failure message into these two. It used
+       to reach for them with overlay.querySelector('h1'/'p'), which silently retargets the
+       moment any earlier <p> is added anywhere in the overlay. -->
   <div id="startPrompt">
-    <h1>Blueprint Explorer</h1>
-    <p>Click to start</p>
+    <h1 id="promptTitle">Blueprint Explorer</h1>
+    <p id="promptSubtitle">Click to start</p>
     <p>WASD to move &middot; Mouse to look &middot; Esc to release</p>
   </div>
 
