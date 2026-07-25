@@ -19,6 +19,13 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
+# Calibrated against two real conversions (see convert()'s sanity check): a real
+# apartment plan needed 3 doorway openings / 1.6% of its interior; a section/elevation
+# view mistakenly uploaded in its place needed 11 openings / 10.2%. These sit well
+# above the real case and well below the bad one.
+MAX_DOORWAY_OPENINGS = 8
+MAX_DOOR_CELL_FRACTION = 0.05
+
 
 # ---------------------------------------------------------------------------
 # Stage 1: load
@@ -544,6 +551,29 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     max_thickness = max(3, cols_actual // 12)
     min_room = max(8, cols_actual // 4)
     wall_mask, door_cells = carve_doorways(wall_mask, min_room, max_thickness, door_cells_wide)
+
+    # Sanity check: carve_doorways exists to bridge the handful of real doorways a
+    # dwelling has (measured: a real apartment plan needs ~3 openings, ~1.6% of the
+    # interior). If it had to carve far more than that, the input almost certainly
+    # isn't a clean top-down plan -- most likely a section/elevation view, where thick
+    # hatching for floors/roof/foundation reads as wall almost everywhere and shatters
+    # the interior into dozens of disconnected pixels (measured on a real section
+    # image: 11 openings, 10.2%). Fail loudly here instead of silently building a level
+    # nobody can meaningfully walk.
+    door_mask = np.zeros_like(wall_mask)
+    for r, c in door_cells:
+        door_mask[r, c] = True
+    _, door_opening_sizes = connected_components(door_mask, connectivity=8)
+    interior_cell_count = int((~wall_mask & ~outside_mask(wall_mask)).sum())
+    door_fraction = len(door_cells) / max(interior_cell_count, 1)
+    if len(door_opening_sizes) > MAX_DOORWAY_OPENINGS or door_fraction > MAX_DOOR_CELL_FRACTION:
+        raise ValueError(
+            f"This doesn't look like a clean top-down floor plan: the converter needed "
+            f"to carve {len(door_opening_sizes)} separate doorway openings "
+            f"({door_fraction * 100:.0f}% of the interior) to reconnect regions that came "
+            "out disconnected -- a real floor plan needs a handful, not this many. This "
+            "usually means the image is a section/elevation view, a very noisy scan, or "
+            "otherwise not a clean top-down plan. Upload a top-down floor plan instead.")
 
     if do_seal:
         wall_mask = seal_border(wall_mask)
