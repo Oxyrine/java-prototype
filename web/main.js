@@ -241,6 +241,15 @@ const uploadPanel = document.getElementById('uploadPanel');
 const uploadForm = document.getElementById('uploadForm');
 const uploadButton = document.getElementById('uploadButton');
 const uploadStatus = document.getElementById('uploadStatus');
+const widthInput = document.getElementById('widthMetres');
+
+// The page reloads itself after a successful build, which resets this field to the value
+// hard-coded in index.html. A corrected width therefore LOOKED ignored -- the build had
+// actually used it -- and, worse, the next upload silently fell back to 12m and rescaled
+// every room, doorway and ceiling in the flat. Persisted the same way pointerSensitivity
+// is, so the field always shows the width the current level was actually built at.
+const storedWidth = parseFloat(localStorage.getItem('buildingWidthMetres'));
+if (Number.isFinite(storedWidth) && storedWidth > 0) widthInput.value = storedWidth;
 
 // Now that the whole overlay is clickable to start, the whole panel (not just the form)
 // needs to stop that click from bubbling up -- otherwise clicking its title, status text,
@@ -292,6 +301,7 @@ uploadForm.addEventListener('submit', async (e) => {
   uploadButton.disabled = true;
   uploadStatus.className = '';
   uploadStatus.textContent = '';
+  localStorage.setItem('buildingWidthMetres', widthInput.value);
   startConvertProgress();
 
   try {
@@ -318,7 +328,10 @@ uploadForm.addEventListener('submit', async (e) => {
       setTimeout(() => window.location.reload(), 4000);
     } else {
       uploadStatus.className = 'ok';
-      uploadStatus.textContent = `Level built! ${data.wallCount} walls, ${pct}% of floor reachable. Reloading…`;
+      // States the width back, because it is the one input that silently rescales the whole
+      // flat and the one whose effect is hardest to eyeball from inside the walkthrough.
+      uploadStatus.textContent = `Level built at ${widthInput.value} m wide! `
+        + `${data.wallCount} walls, ${pct}% of floor reachable. Reloading…`;
       setTimeout(() => window.location.reload(), 1200);
     }
   } catch (err) {
@@ -792,35 +805,21 @@ function updateDust(delta) {
 // wall list, since a bug here should be loud in the console the moment a level loads,
 // not discovered later by walking into a doorway that turns out too narrow.
 function checkDoorwayClearance(data) {
-  const cellSize = data.cellSize;
-  const grid = data.grid;
-  let minDoorWidth = Infinity;
-
-  for (const row of grid) {
-    let run = 0;
-    for (let c = 0; c <= row.length; c++) {
-      if (row[c] === '3') {
-        run++;
-      } else {
-        if (run > 0) minDoorWidth = Math.min(minDoorWidth, run * cellSize);
-        run = 0;
-      }
-    }
-  }
-  for (let c = 0; c < grid[0].length; c++) {
-    let run = 0;
-    for (let r = 0; r <= grid.length; r++) {
-      if (r < grid.length && grid[r][c] === '3') {
-        run++;
-      } else {
-        if (run > 0) minDoorWidth = Math.min(minDoorWidth, run * cellSize);
-        run = 0;
-      }
-    }
+  // Measures each doorway by its LONGER side, via the same components buildDoors() uses.
+  // The previous version scanned '3' runs along rows and columns and took the global
+  // minimum, which measured the wall THICKNESS -- a doorway through a one-cell wall has a
+  // one-cell run across it -- and so warned "narrowest doorway is 0.10m" on every level,
+  // including ones whose doorways were all comfortably over half a metre. A warning that
+  // fires every time is a warning nobody reads.
+  const doorways = computeDoorways(data);
+  let narrowest = Infinity;
+  for (const { r0, r1, c0, c1 } of doorways) {
+    const opening = Math.max((c1 - c0 + 1), (r1 - r0 + 1)) * data.cellSize;
+    narrowest = Math.min(narrowest, opening);
   }
 
-  if (Number.isFinite(minDoorWidth) && minDoorWidth < PLAYER_RADIUS * 2) {
-    console.warn(`Doorway clearance: narrowest carved doorway is ${minDoorWidth.toFixed(2)}m but ` +
+  if (Number.isFinite(narrowest) && narrowest < PLAYER_RADIUS * 2) {
+    console.warn(`Doorway clearance: narrowest doorway is ${narrowest.toFixed(2)}m but ` +
       `the player is ${(PLAYER_RADIUS * 2).toFixed(2)}m wide -- it may be too tight to walk through.`);
   }
 }
