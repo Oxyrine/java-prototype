@@ -641,6 +641,7 @@ function buildLevel(data) {
   const position = new THREE.Vector3();
   const quaternion = new THREE.Quaternion();
   const scale = new THREE.Vector3();
+  const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
   function addInstancedGroup(walls, material) {
     if (walls.length === 0) return;
@@ -648,6 +649,9 @@ function buildLevel(data) {
     walls.forEach((wall, i) => {
       position.set(wall.position.x, wall.position.y, wall.position.z);
       scale.set(wall.size.x, wall.size.y, wall.size.z);
+      // Zero for every grid-aligned box, which is nearly all of them; non-zero only for
+      // the single box LevelBuilder emits in place of a staircase along an angled wall.
+      quaternion.setFromAxisAngle(WORLD_UP, wall.rotationY || 0);
       matrix.compose(position, quaternion, scale);
       mesh.setMatrixAt(i, matrix);
     });

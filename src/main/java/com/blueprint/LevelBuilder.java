@@ -5,7 +5,11 @@ import com.blueprint.model.Vec3;
 import com.blueprint.model.WallData;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Converts a validated char[][] grid into a LevelData ready for JSON export.
@@ -78,7 +82,7 @@ public class LevelBuilder {
         }
 
         List<WallData> walls = new ArrayList<>();
-        walls.addAll(extractRectangles(grid, '1', rows, cols, cellSize, wallHeight / 2.0, wallHeight));
+        walls.addAll(buildWalls(grid, rows, cols, cellSize, wallHeight));
         if (wallHeight > DOOR_HEIGHT) {
             walls.addAll(extractRectangles(grid, '3', rows, cols, cellSize,
                     (DOOR_HEIGHT + wallHeight) / 2.0, wallHeight - DOOR_HEIGHT));
@@ -102,16 +106,202 @@ public class LevelBuilder {
                 walls, windows);
     }
 
+    // ---------------------------------------------------------------------------
+    // Angled walls.
+    //
+    // A wall the architect drew at an angle cannot be represented by a grid, so it
+    // rasterises into a staircase. Emitting one box per step is technically faithful and
+    // looks wrong: walking past it, each step's side face is exposed, and in perspective
+    // the bases and tops of boxes at different depths land at different screen heights.
+    // The result reads as a row of fins with battlement silhouettes rather than as a wall.
+    //
+    // Fixed by recognising a staircase and replacing the whole run with ONE box rotated to
+    // match. Detection runs on the merged rectangles rather than on raw cells -- ~140 items
+    // instead of ~16,000, and the steps are already grouped. A run qualifies when each
+    // rectangle sits directly after the previous one along one axis and is offset from it
+    // by a small, consistent amount along the other.
+    //
+    // Collision is deliberately NOT changed: it reads the grid, which still holds the
+    // staircase, so the walkable envelope is unchanged and none of the hard-won collision
+    // behaviour is at risk. The visible wall and the collision boundary therefore disagree
+    // by up to half a cell along these runs, which at a typical cellSize is a few
+    // centimetres -- far less noticeable than the fins were.
+    // ---------------------------------------------------------------------------
+
+    /** A merged rectangle in GRID space, before it is turned into world geometry. */
+    private record CellRect(int row, int col, int width, int rows) {}
+
+    private static final int STEP_MAX_SHORT_SIDE = 3; // a step is a stub, not a whole wall
+    private static final int STEP_MAX_LONG_SIDE = 8;
+    private static final int STEP_MAX_OFFSET = 3;     // how far one step may shift from the last
+    private static final int MIN_STEPS_FOR_RUN = 4;   // fewer than this is a corner, not a slope
+
+    private static List<WallData> buildWalls(char[][] grid, int rows, int cols,
+                                              double cellSize, double wallHeight) {
+        List<CellRect> rects = extractCellRects(grid, '1', rows, cols);
+        List<WallData> out = new ArrayList<>();
+        Set<CellRect> consumed = new HashSet<>();
+
+        // Once column-stacked, once row-stacked, so a staircase is found whichever way it
+        // leans. Anything claimed by the first pass is off-limits to the second.
+        for (boolean rowStacked : new boolean[] { false, true }) {
+            List<CellRect> remaining = new ArrayList<>();
+            for (CellRect r : rects) {
+                if (!consumed.contains(r)) {
+                    remaining.add(r);
+                }
+            }
+            for (List<CellRect> run : findStaircases(remaining, rowStacked)) {
+                out.add(angledBox(run, rows, cellSize, wallHeight));
+                consumed.addAll(run);
+            }
+        }
+
+        for (CellRect r : rects) {
+            if (!consumed.contains(r)) {
+                out.add(toWall(r, rows, cellSize, wallHeight / 2.0, wallHeight));
+            }
+        }
+        return out;
+    }
+
+    private static List<List<CellRect>> findStaircases(List<CellRect> rects, boolean rowStacked) {
+        List<CellRect> steps = new ArrayList<>();
+        for (CellRect r : rects) {
+            if (Math.min(r.width(), r.rows()) <= STEP_MAX_SHORT_SIDE
+                    && Math.max(r.width(), r.rows()) <= STEP_MAX_LONG_SIDE) {
+                steps.add(r);
+            }
+        }
+        // Indexed by the line each rectangle STARTS on, so the next step in a run is a
+        // direct lookup rather than a scan over every candidate.
+        Map<Integer, List<CellRect>> byStart = new HashMap<>();
+        for (CellRect r : steps) {
+            byStart.computeIfAbsent(rowStacked ? r.row() : r.col(), k -> new ArrayList<>()).add(r);
+        }
+
+        Set<CellRect> used = new HashSet<>();
+        List<List<CellRect>> runs = new ArrayList<>();
+        for (CellRect seed : steps) {
+            if (used.contains(seed)) {
+                continue;
+            }
+            List<CellRect> run = new ArrayList<>();
+            run.add(seed);
+            CellRect current = seed;
+            int stepSign = 0;
+            while (true) {
+                int nextLine = rowStacked ? current.row() + current.rows()
+                                          : current.col() + current.width();
+                CellRect best = null;
+                int bestOffset = 0;
+                for (CellRect candidate : byStart.getOrDefault(nextLine, List.of())) {
+                    if (used.contains(candidate) || run.contains(candidate)) {
+                        continue;
+                    }
+                    int offset = rowStacked ? candidate.col() - current.col()
+                                            : candidate.row() - current.row();
+                    // offset == 0 is a straight wall the greedy merge happened to split,
+                    // not a slope; a consistent sign is what makes a run a slope at all.
+                    if (offset == 0 || Math.abs(offset) > STEP_MAX_OFFSET) {
+                        continue;
+                    }
+                    if (stepSign != 0 && Integer.signum(offset) != stepSign) {
+                        continue;
+                    }
+                    if (best == null || Math.abs(offset) < Math.abs(bestOffset)) {
+                        best = candidate;
+                        bestOffset = offset;
+                    }
+                }
+                if (best == null) {
+                    break;
+                }
+                run.add(best);
+                stepSign = Integer.signum(bestOffset);
+                current = best;
+            }
+            if (run.size() >= MIN_STEPS_FOR_RUN) {
+                used.addAll(run);
+                runs.add(run);
+            }
+        }
+        return runs;
+    }
+
+    /** One box spanning a whole staircase, rotated to lie along it. */
+    private static WallData angledBox(List<CellRect> run, int gridRows, double cellSize,
+                                       double wallHeight) {
+        CellRect first = run.get(0);
+        CellRect last = run.get(run.size() - 1);
+        double x0 = centerX(first, cellSize), z0 = centerZ(first, gridRows, cellSize);
+        double x1 = centerX(last, cellSize), z1 = centerZ(last, gridRows, cellSize);
+        double dx = x1 - x0, dz = z1 - z0;
+        double span = Math.hypot(dx, dz);
+
+        double thickness = 0;
+        for (CellRect r : run) {
+            thickness += Math.min(r.width(), r.rows()) * cellSize;
+        }
+        // One extra cell of thickness: the ideal line runs through the middle of the steps,
+        // so without it the box sits inside the staircase and the outer corner of every
+        // step poked through it.
+        thickness = thickness / run.size() + cellSize;
+
+        // span only reaches from the CENTRE of the first step to the centre of the last, so
+        // the box has to be extended by half of each end step to reach where the staircase
+        // physically ended. Leaving it at span left a vertical slit at both ends where the
+        // run met the wall it joins, and daylight showed straight through the building.
+        // Measured along the run direction rather than as a flat margin, so a shallow run
+        // is not over-extended into the room beyond.
+        double ux = dx / span, uz = dz / span;
+        double endFirst = Math.abs(first.width() * cellSize * ux) + Math.abs(first.rows() * cellSize * uz);
+        double endLast = Math.abs(last.width() * cellSize * ux) + Math.abs(last.rows() * cellSize * uz);
+        double length = span + (endFirst + endLast) / 2.0 + cellSize;
+
+        // A Y rotation maps local +X to (cos t, 0, -sin t), so this aims the box's length
+        // along the run. The hypot above already made span the true diagonal distance.
+        double rotationY = Math.atan2(-dz, dx);
+        return new WallData(
+                new Vec3((x0 + x1) / 2.0, wallHeight / 2.0, (z0 + z1) / 2.0),
+                new Vec3(length, wallHeight, thickness),
+                first.row(), first.col(), rotationY);
+    }
+
+    private static double centerX(CellRect r, double cellSize) {
+        return (r.col() + (r.width() - 1) / 2.0) * cellSize;
+    }
+
+    private static double centerZ(CellRect r, int gridRows, double cellSize) {
+        return (gridRows - 1 - (r.row() + (r.rows() - 1) / 2.0)) * cellSize;
+    }
+
+    private static WallData toWall(CellRect r, int gridRows, double cellSize,
+                                    double centerY, double boxHeightY) {
+        return new WallData(
+                new Vec3(centerX(r, cellSize), centerY, centerZ(r, gridRows, cellSize)),
+                new Vec3(r.width() * cellSize, boxHeightY, r.rows() * cellSize),
+                r.row(), r.col());
+    }
+
+    private static List<WallData> extractRectangles(char[][] grid, char target, int rows, int cols,
+                                                      double cellSize, double centerY, double boxHeightY) {
+        List<WallData> result = new ArrayList<>();
+        for (CellRect r : extractCellRects(grid, target, rows, cols)) {
+            result.add(toWall(r, rows, cellSize, centerY, boxHeightY));
+        }
+        return result;
+    }
+
     /**
      * Greedy maximal-rectangle merge over cells equal to {@code target}: for each
      * unvisited match, extend right while the row keeps matching, then extend down
      * while every cell in that full width still matches, then mark the rectangle
-     * visited and emit one box for it.
+     * visited and emit one rectangle for it.
      */
-    private static List<WallData> extractRectangles(char[][] grid, char target, int rows, int cols,
-                                                      double cellSize, double centerY, double boxHeightY) {
+    private static List<CellRect> extractCellRects(char[][] grid, char target, int rows, int cols) {
         boolean[][] visited = new boolean[rows][cols];
-        List<WallData> result = new ArrayList<>();
+        List<CellRect> result = new ArrayList<>();
 
         for (int row = 0; row < rows; row++) {
             for (int col = 0; col < cols; col++) {
@@ -141,11 +331,7 @@ public class LevelBuilder {
                     }
                 }
 
-                double x = (col + (width - 1) / 2.0) * cellSize;
-                double z = (rows - 1 - (row + (runRows - 1) / 2.0)) * cellSize;
-                Vec3 position = new Vec3(x, centerY, z);
-                Vec3 size = new Vec3(width * cellSize, boxHeightY, runRows * cellSize);
-                result.add(new WallData(position, size, row, col));
+                result.add(new CellRect(row, col, width, runRows));
             }
         }
 
