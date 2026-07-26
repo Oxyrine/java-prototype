@@ -251,6 +251,14 @@ body.canInteract #crosshair {
 #savedLevelsRow { display: flex; gap: 6px; }
 #savedLevelSelect { flex: 1; }
 #savedLevelsRow button { width: auto; padding: 6px 16px; }
+
+#widthRow { display: flex; gap: 6px; align-items: stretch; }
+#widthRow input { flex: 1; }
+#widthRow button { width: auto; padding: 6px 16px; margin: 0; white-space: nowrap; }
+.hintNote {
+  font-size: 11px; line-height: 1.5; color: rgba(224,242,254,.45);
+  margin: 6px 0 0;
+}
 #loadLevelStatus { min-height: 16px; margin: 8px 0 0; font-size: 12px; font-family: var(--bp-mono); }
 #loadLevelStatus.error { color: #ff8a8a; }
 #loadLevelStatus.ok { color: #8aff9e; }

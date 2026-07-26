@@ -63,12 +63,49 @@ def convert():
         return jsonify(success=False,
                         error=f"Unsupported file type '{suffix}'. Use PNG, JPG, or PDF."), 400
 
+    width_metres, error = parse_width(request.form.get("widthMetres"))
+    if error:
+        return jsonify(success=False, error=error), 400
+
+    BLUEPRINTS_DIR.mkdir(parents=True, exist_ok=True)
+    upload_path = BLUEPRINTS_DIR / f"uploaded{suffix}"
+    file.save(upload_path)
+
+    return build_from_image(upload_path, width_metres)
+
+
+@app.route("/api/rebuild", methods=["POST"])
+def rebuild():
+    """Re-convert the blueprint already uploaded, at a different width.
+
+    Width is the single input that rescales the entire flat -- every room, doorway and
+    ceiling comes off it -- and the only honest way to check it is to walk the result and
+    compare against the dimensions printed on the plan. That makes it a second guess
+    almost every time. Without this, correcting it means finding the file again and
+    re-uploading the identical image.
+    """
+    data = request.get_json(silent=True) or {}
+    width_metres, error = parse_width(data.get("widthMetres"))
+    if error:
+        return jsonify(success=False, error=error), 400
+
+    existing = [p for p in BLUEPRINTS_DIR.glob("uploaded.*")
+                if p.suffix.lower() in ALLOWED_SUFFIXES]
+    if not existing:
+        return jsonify(success=False,
+                        error="No uploaded blueprint to rebuild -- upload an image first."), 400
+
+    return build_from_image(existing[0], width_metres)
+
+
+def parse_width(raw):
+    """Returns (width_metres, None) or (None, error message)."""
     try:
-        width_metres = float(request.form.get("widthMetres", 12.0))
+        width_metres = float(raw if raw is not None else 12.0)
         if width_metres <= 0:
             raise ValueError
-    except ValueError:
-        return jsonify(success=False, error="Building width must be a positive number."), 400
+    except (TypeError, ValueError):
+        return None, "Building width must be a positive number."
 
     # Architectural drawings are dimensioned in millimetres, so it is very easy to read
     # "12123" off the plan and type it into a field labelled metres -- which silently
@@ -85,15 +122,17 @@ def convert():
                         f"read this off the drawing, enter {width_metres / 1000:g} instead.")
         else:
             message += " Enter the width in metres (a house is typically 8-20)."
-        return jsonify(success=False, error=message), 400
+        return None, message
 
-    BLUEPRINTS_DIR.mkdir(parents=True, exist_ok=True)
-    upload_path = BLUEPRINTS_DIR / f"uploaded{suffix}"
-    file.save(upload_path)
+    return width_metres, None
 
+
+def build_from_image(image_path, width_metres):
+    """Run both pipeline stages and return the JSON response body. Shared by /api/convert
+    and /api/rebuild, which differ only in where the image came from."""
     try:
         out_txt, cell_size, wall_height, reachable_fraction, wall_count = blueprint_to_grid.convert(
-            image_path=upload_path, out_name="uploaded", cols=None, fill=0.12,
+            image_path=image_path, out_name="uploaded", cols=None, fill=0.12,
             width_metres=width_metres, wall_height=2.5, dpi=200, invert=False,
             min_region=6, do_seal=True, keep_largest_only=True)
     except Exception as e:
@@ -111,7 +150,10 @@ def convert():
                     "spawn -- a room is still isolated even after automatic doorway carving. Check "
                     f"blueprints/uploaded.overlay.png to see exactly which walls were detected.")
 
-    return jsonify(success=True, wallCount=wall_count,
+    # cellSize is echoed back so the page can state the scale it actually built at, rather
+    # than the user having to trust that the number in the box was the one that was used.
+    return jsonify(success=True, wallCount=wall_count, cellSize=round(cell_size, 4),
+                    widthMetres=width_metres,
                     reachableFraction=round(reachable_fraction, 3), warning=warning)
 
 

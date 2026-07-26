@@ -242,6 +242,7 @@ const uploadForm = document.getElementById('uploadForm');
 const uploadButton = document.getElementById('uploadButton');
 const uploadStatus = document.getElementById('uploadStatus');
 const widthInput = document.getElementById('widthMetres');
+const rebuildButton = document.getElementById('rebuildButton');
 
 // The page reloads itself after a successful build, which resets this field to the value
 // hard-coded in index.html. A corrected width therefore LOOKED ignored -- the build had
@@ -296,19 +297,21 @@ function stopConvertProgress() {
   stageLegend.forEach((li) => li.classList.remove('active'));
 }
 
-uploadForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
+// Uploading a new image and rebuilding the current one at a different width run the
+// identical two-stage pipeline and report identically; only where the request comes from
+// differs. sendRequest is a thunk so the caller decides that and nothing else.
+async function runBuild(sendRequest) {
   uploadButton.disabled = true;
+  rebuildButton.disabled = true;
   uploadStatus.className = '';
   uploadStatus.textContent = '';
   localStorage.setItem('buildingWidthMetres', widthInput.value);
   startConvertProgress();
 
   try {
-    const formData = new FormData(uploadForm);
     let res;
     try {
-      res = await fetch('/api/convert', { method: 'POST', body: formData });
+      res = await sendRequest();
     } catch (networkErr) {
       // fetch() itself throws (not a 4xx/5xx response) only when the request never reached a
       // server at all -- e.g. server.py has died. Distinguish this from a real conversion
@@ -322,28 +325,45 @@ uploadForm.addEventListener('submit', async (e) => {
     }
 
     const pct = Math.round(data.reachableFraction * 100);
+    // Read back from the SERVER's response, not from the input box. The point of showing
+    // it is to be evidence of what was actually built; echoing the field back would just
+    // repeat what was typed and prove nothing.
+    const scale = `${data.widthMetres} m wide (${data.cellSize} m per cell)`;
     if (data.warning) {
       uploadStatus.className = 'warn';
-      uploadStatus.textContent = `${data.wallCount} walls, only ${pct}% of floor reachable. ${data.warning} Reloading…`;
+      uploadStatus.textContent = `Built at ${scale}. ${data.wallCount} walls, only ${pct}% of `
+        + `floor reachable. ${data.warning} Reloading…`;
       setTimeout(() => window.location.reload(), 4000);
     } else {
       uploadStatus.className = 'ok';
-      // States the width back, because it is the one input that silently rescales the whole
-      // flat and the one whose effect is hardest to eyeball from inside the walkthrough.
-      uploadStatus.textContent = `Level built at ${widthInput.value} m wide! `
-        + `${data.wallCount} walls, ${pct}% of floor reachable. Reloading…`;
+      uploadStatus.textContent = `Level built at ${scale}. ${data.wallCount} walls, `
+        + `${pct}% of floor reachable. Reloading…`;
       setTimeout(() => window.location.reload(), 1200);
     }
   } catch (err) {
     uploadStatus.className = 'error';
     uploadStatus.textContent = String(err.message || err);
     uploadButton.disabled = false;
+    rebuildButton.disabled = false;
   } finally {
     // All three exit paths above write the final status text, and two of them then start
     // a reload timer. Without this the 250ms tick would keep running and overwrite that
     // text a moment after it appeared.
     stopConvertProgress();
   }
+}
+
+uploadForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  runBuild(() => fetch('/api/convert', { method: 'POST', body: new FormData(uploadForm) }));
+});
+
+rebuildButton.addEventListener('click', () => {
+  runBuild(() => fetch('/api/rebuild', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ widthMetres: parseFloat(widthInput.value) }),
+  }));
 });
 
 // ---------- input ----------
