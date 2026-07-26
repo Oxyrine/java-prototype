@@ -1,5 +1,7 @@
 target/
 web/level01.json
+# Render screenshots saved by server.py's dev-only /api/screenshot endpoint.
+.preview/
 *.class
 .idea/
 *.iml

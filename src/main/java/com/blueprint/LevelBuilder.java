@@ -28,6 +28,12 @@ public class LevelBuilder {
 
     private static final double DOOR_HEIGHT = 2.0; // metres -- real-world doorway clearance
 
+    // Ordinary residential window band. A '4' cell becomes solid wall below the sill and
+    // above the head, with a glass pane between -- so a window reads as a hole punched in
+    // a wall at eye level rather than as a full-height gap.
+    private static final double WINDOW_SILL_HEIGHT = 0.9;
+    private static final double WINDOW_HEAD_HEIGHT = 2.1;
+
     public static LevelData build(char[][] grid, String levelName, double cellSize, double wallHeight)
             throws BlueprintFormatException {
         int rows = grid.length;
@@ -44,7 +50,10 @@ public class LevelBuilder {
             for (int col = 0; col < cols; col++) {
                 char cell = grid[row][col];
                 switch (cell) {
-                    case '1', '0', '3' -> { /* handled by rectangle extraction below */ }
+                    // '5' is the void outside the building: solid to the player, but no
+                    // rectangle is ever extracted for it, so nothing is drawn there and a
+                    // window looks out at sky instead of at a wall a few centimetres away.
+                    case '1', '0', '3', '4', '5' -> { /* handled by rectangle extraction below */ }
                     case '2' -> {
                         if (spawn != null) {
                             throw new BlueprintFormatException(String.format(
@@ -75,7 +84,22 @@ public class LevelBuilder {
                     (DOOR_HEIGHT + wallHeight) / 2.0, wallHeight - DOOR_HEIGHT));
         }
 
-        return new LevelData(levelName, cols, rows, cellSize, wallHeight, spawn, gridStrings, walls);
+        // A window cell contributes three boxes: the spandrel under the sill and the
+        // header over it are ordinary opaque wall, and only the band between them is
+        // glass. The glass goes in its own list so the renderer can give it a
+        // transparent material without having to guess which walls are windows.
+        walls.addAll(extractRectangles(grid, '4', rows, cols, cellSize,
+                WINDOW_SILL_HEIGHT / 2.0, WINDOW_SILL_HEIGHT));
+        if (wallHeight > WINDOW_HEAD_HEIGHT) {
+            walls.addAll(extractRectangles(grid, '4', rows, cols, cellSize,
+                    (WINDOW_HEAD_HEIGHT + wallHeight) / 2.0, wallHeight - WINDOW_HEAD_HEIGHT));
+        }
+        List<WallData> windows = extractRectangles(grid, '4', rows, cols, cellSize,
+                (WINDOW_SILL_HEIGHT + WINDOW_HEAD_HEIGHT) / 2.0,
+                WINDOW_HEAD_HEIGHT - WINDOW_SILL_HEIGHT);
+
+        return new LevelData(levelName, cols, rows, cellSize, wallHeight, spawn, gridStrings,
+                walls, windows);
     }
 
     /**

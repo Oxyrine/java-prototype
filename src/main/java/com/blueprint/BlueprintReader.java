@@ -8,8 +8,9 @@ import java.util.List;
 
 /**
  * Reads a blueprint text file into a char[][] grid and validates its shape.
- * Recognised characters: '1' wall, '0' floor, '2' spawn. Blank lines and
- * lines starting with '#' are treated as comments and skipped.
+ * Recognised characters: '1' wall, '0' floor, '2' spawn, '3' doorway, '4' window,
+ * '5' void (solid, but outside the building and never drawn).
+ * Blank lines and lines starting with '#' are treated as comments and skipped.
  */
 public class BlueprintReader {
 
@@ -50,10 +51,10 @@ public class BlueprintReader {
             char[] chars = line.toCharArray();
             for (int col = 0; col < chars.length; col++) {
                 char c = chars[col];
-                if (c != '1' && c != '0' && c != '2' && c != '3') {
+                if (c != '1' && c != '0' && c != '2' && c != '3' && c != '4' && c != '5') {
                     throw new BlueprintFormatException(String.format(
                             "Unrecognised character '%c' at row %d, col %d. Only '1' (wall), '0' (floor), "
-                                    + "'2' (spawn), '3' (doorway) are allowed.",
+                                    + "'2' (spawn), '3' (doorway), '4' (window), '5' (void) are allowed.",
                             c, row, col));
                 }
             }

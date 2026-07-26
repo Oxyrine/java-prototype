@@ -123,6 +123,29 @@ def convert():
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+@app.route("/api/screenshot", methods=["POST"])
+def screenshot():
+    """Dev-only: save a PNG the page rendered, so the WebGL view can actually be looked at.
+
+    This exists because there is no other way to SEE the render. Every other part of the
+    pipeline can be inspected from a terminal -- the grid is text, the overlay is a PNG,
+    the level is JSON -- but the walkthrough itself only exists as pixels inside a canvas,
+    and the whole point of the project is how those pixels look. Without this, changing a
+    material or a light is a blind edit.
+
+    Call it from the page's console:
+        renderer.domElement.toBlob(b => fetch('/api/screenshot',{method:'POST',body:b}))
+    """
+    shots_dir = PROJECT_ROOT / ".preview"
+    shots_dir.mkdir(exist_ok=True)
+    name = request.args.get("name", "latest")
+    if not NAME_PATTERN.match(name):
+        return jsonify(success=False, error="Invalid screenshot name."), 400
+    out = shots_dir / f"{name}.png"
+    out.write_bytes(request.get_data())
+    return jsonify(success=True, path=str(out))
+
+
 @app.route("/api/levels")
 def list_levels():
     names = sorted(

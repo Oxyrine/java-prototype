@@ -36,16 +36,20 @@ const scene = new THREE.Scene();
 // CSS gradient behind a transparent clear (fog would fade geometry to transparent, which
 // makes the CSS color the de-facto fog color anyway -- same result, less control).
 // It is screen-space fixed rather than equirect, so it does not swing when you look up;
-// irrelevant here, since the ceiling plane blocks the sky and far=18 fogs out any gap.
+// irrelevant here, since the ceiling plane blocks the sky.
+//
+// Daylight, not the old midnight navy. This is now genuinely visible: windows are real
+// openings, so this gradient is what a buyer sees through them, and it has to look like
+// an afternoon outside rather than the inside of a cave.
 function makeSkyTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = 2;
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
   const gradient = ctx.createLinearGradient(0, 0, 0, 256);
-  gradient.addColorStop(0, '#0a1929');
-  gradient.addColorStop(0.55, '#16324a');
-  gradient.addColorStop(1, '#1b3a52');
+  gradient.addColorStop(0, '#7fb3e0');
+  gradient.addColorStop(0.55, '#bcd8ee');
+  gradient.addColorStop(1, '#e8eef2');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, 2, 256);
   const texture = new THREE.CanvasTexture(canvas);
@@ -54,11 +58,15 @@ function makeSkyTexture() {
 }
 scene.background = makeSkyTexture();
 
-// 0x16324a is the sky gradient's MIDDLE stop, not the top one: the sky you actually
-// glimpse through a doorway or gap is at eye level, so matching the horizon band is what
-// makes a distant corridor fade out instead of ending in a visible seam. Near/far stay at
-// Phase 1's 3/18 -- these are indoor rooms, not an open maze.
-scene.fog = new THREE.Fog(0x16324a, 3, 18);
+// Matches the sky gradient's MIDDLE stop, not the top one: the sky you actually glimpse
+// through a window is at eye level, so matching the horizon band is what makes a distant
+// view fade out instead of ending in a visible seam.
+//
+// Pushed from 3/18 out to 22/70. At 3m a fog this near tinted every surface in every room
+// -- an apartment is only ~10m across, so the far wall of the living room was already
+// half-faded, which is what made rooms read as murky rather than as rooms. Out here it
+// only ever softens the view through a window.
+scene.fog = new THREE.Fog(0xbcd8ee, 22, 70);
 
 // far=100 (was 200): these are single-floor indoor scenes, rarely more than ~20-30m across.
 // A needlessly distant far plane starves the depth buffer's precision near the camera,
@@ -83,22 +91,29 @@ window.addEventListener('resize', () => {
 });
 
 // ---------- lighting ----------
-// Cool sky-fill plus a warm key, instead of neutral white. This is where the mood comes
-// from -- deliberately NOT tone mapping. Three r185 already defaults to SRGBColorSpace
-// output with ColorManagement on, so colors are managed; ACES on top would re-grade all
-// 20 hand-picked hex values at once, and it compresses saturation hardest in exactly the
-// 0x5a-0x9a midrange where the 14 ROOM_PALETTE entries live -- their mutual separation is
-// the whole point of that feature. Tinting the lights shifts every surface uniformly, so
-// every color relationship already tuned survives intact.
+// Bright, neutral daylight. Deliberately NOT tone mapping: Three r185 already defaults to
+// SRGBColorSpace output with ColorManagement on, so colors are managed, and ACES on top
+// would re-grade every hand-picked hex at once while crushing the near-white wall and
+// ceiling values that carry the whole "finished interior" read.
 //
-// The ground color is NOT just "the dark end of the gradient". The ceiling plane's normal
-// points straight down, so the hemisphere weight is 0 and it receives groundColor and
-// nothing else -- the sun sits at y=+25 and contributes nothing to a downward-facing
-// surface. Setting this to 0x0a1929 against a 0x1d3348 ceiling multiplied out to #000002,
-// a literally black ceiling. Read this as "light bouncing back up off the lit floor",
-// which is also what it physically is, and keep it well above the fog color.
-scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x62809e, 1.1));
-const sun = new THREE.DirectionalLight(0xfff2dd, 1.3);
+// AmbientLight is doing real work here and is not redundant with the hemisphere. A
+// downward-facing surface gets hemisphere weight 0, so the ceiling used to receive
+// groundColor ALONE (the sun sits at y=+25 and gives a down-facing plane nothing), which
+// is why the old ceiling hex had to be set absurdly bright just to render dark navy --
+// see the ceiling in buildLevel(). Ambient is normal-independent, so it lights the
+// ceiling directly and that whole workaround disappears: the ceiling can now simply be
+// white and look white.
+// Kept deliberately low. Ambient is normal-independent, which is exactly what the ceiling
+// needs and exactly what flattens everything else: at 1.4 every surface in the flat
+// received the same value, walls and ceiling merged into one beige field, and rooms had
+// no edges. It is here to stop the ceiling going black, not to light the flat.
+scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+// The main fill. Warm from above, cooler bounce from below, so a wall and a ceiling never
+// land on the same value even where the sun reaches neither.
+scene.add(new THREE.HemisphereLight(0xfff4e2, 0xbcae99, 1.15));
+// Key light, doing the actual shaping: with ambient down at 0.45 this is what makes
+// north- and east-facing walls read as different surfaces instead of one flat plane.
+const sun = new THREE.DirectionalLight(0xfff2dd, 1.5);
 sun.position.set(15, 25, 10);
 scene.add(sun);
 
@@ -381,19 +396,13 @@ fetch('level01.json', { cache: 'no-store' }) // dynamically regenerated by uploa
 // exactly one tile with no floor mesh under it (a hole you spawn standing on), and once
 // the HUD started reading room ids it also reported no room until you stepped off.
 const isRoomFloor = (cell) => cell === '0' || cell === '2';
-// Every entry is the original hue lifted by a uniform +0x10 per channel, now that the
-// walls and ceiling are dark navy. A uniform offset raises value without touching the
-// mutual separation between hues, which is the entire reason this palette exists --
-// shifting them toward monochrome to "match" the drafting theme would delete the feature.
-const ROOM_PALETTE = [
-  0x6a8d7b, 0x7b7a9f, 0x9a7f6a, 0x6a8a9f, 0x9a6a7f,
-  0x7f9a6a, 0x6a6a9a, 0x9a8a6a, 0x6a9a8a, 0x8a6a9a,
-  0x9a6a6a, 0x6a9a6a, 0x8a8a6a, 0x6a8a8a,
-];
-// Doorway cell with no room neighbour to inherit from. Not the rare fallback it reads
-// like -- a real floor plan produces a few hundred of these, so it needs to sit in the
-// palette rather than stand out.
-const ORPHAN_DOORWAY_COLOR = 0x5f7d94;
+// One oak-toned floor throughout, replacing the 14-hue per-room palette. That palette
+// made rooms legible by giving each its own colour, but a lime bedroom beside a purple
+// one reads as a game level, which is exactly the wrong impression for someone deciding
+// whether they want to live here. Rooms are still identified -- the HUD label and the
+// minimap highlight both read the same roomIdOf() below -- just not by painting the
+// floor of each one a different colour.
+const FLOOR_COLOR = 0xb08d63;
 
 // Set once by buildLevel(); the HUD and the minimap's current-room highlight both read
 // this same closure, so the room number on screen and the floor color underfoot are the
@@ -577,25 +586,16 @@ function buildLevel(data) {
   // merges adjacent wall cells into rectangles (and doorway cells into lintels), so
   // walls arrive with real, varied dimensions instead of one cellSize cube each.
   const wallGeometry = new THREE.BoxGeometry(1, 1, 1);
-  // Desaturated navy rather than the old light gray. A glow is a contrast illusion --
-  // the emissive lintels below only read as lit if the surfaces around them are dark.
-  // It also leaves the room floors as the only saturated surfaces in frame, which is
-  // simultaneously the blueprint look and better room legibility than before.
-  const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x3b5270 });
+  // Warm off-white painted plaster, replacing the old desaturated navy. Navy existed to
+  // make the emissive cyan lintels read as "glowing", which was a look, not a room. High
+  // roughness keeps it matte -- anything shinier immediately reads as plastic.
+  const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xf4eee2, roughness: 0.95 });
   // A doorway lintel is any wall box shorter than the full wall height (LevelBuilder.java
-  // emits these for '3' cells, spanning door-height up to the ceiling). Giving it the
-  // same flat gray as every other wall made it visually disappear into the wall face --
-  // the header was structurally a doorframe but read as just more wall. A distinct warm
-  // trim color is the cheapest way to make an opening actually look like a built doorway
-  // instead of a hole with matching-colored geometry above it. It carries a faint cyan
-  // emissive (--bp-line in style.css) so a doorway still reads as a lit opening down a
-  // dark corridor -- but only faint. At 0.85 the header became a flat, blown-out cyan
-  // slab that read as a light fixture bolted over the door rather than a doorframe, and
-  // it was the loudest thing in every frame. The base color does the work; the emissive
-  // just keeps it from going flat in shadow.
-  const lintelMaterial = new THREE.MeshStandardMaterial({
-    color: 0x35566f, emissive: 0x4fc3f7, emissiveIntensity: 0.18,
-  });
+  // emits these for '3' cells, spanning door-height up to the ceiling). It needs to stay
+  // distinguishable from the wall or an opening reads as a hole with matching geometry
+  // above it -- but as painted trim, a shade brighter than the wall, rather than the old
+  // cyan-emissive slab that read as a light fixture bolted over every door.
+  const lintelMaterial = new THREE.MeshStandardMaterial({ color: 0xfbf7f0, roughness: 0.9 });
 
   const fullWalls = data.walls.filter((w) => w.size.y >= data.wallHeight - 0.001);
   const lintels = data.walls.filter((w) => w.size.y < data.wallHeight - 0.001);
@@ -629,26 +629,32 @@ function buildLevel(data) {
   // hard offset lip along one edge of every header. It also carried fog:false, so distant
   // doorways glowed at full strength while the wall around them faded out.
 
-  // Floor: one InstancedMesh per room color instead of one flat color for the whole
-  // building. With everything the same color (walls, floor, ceiling all uniform),
-  // there was no way to tell which room you were in while walking. First attempt
-  // used a single InstancedMesh with per-instance (vertexColors) color, which
-  // rendered solid black -- InstancedMesh.instanceColor needs the base geometry to
-  // carry its own vertex-color attribute to multiply against, which a plain
-  // PlaneGeometry doesn't have, and skipping that produced black instead of white.
-  // Grouping by color and reusing the exact addInstancedGroup pattern already
-  // proven for walls/lintels above sidesteps the whole issue.
+  // Glass. Rendered from its own `windows` list rather than sniffed out of `walls` by
+  // height, because LevelBuilder.java already knows exactly which boxes are panes and
+  // emits the opaque sill and header into `walls` alongside them. transparent+opacity
+  // alone would read as a grey film, so the emissive is what sells it as daylight
+  // coming through: a pane is much brighter than the wall around it, which is precisely
+  // how a window looks from inside a room.
+  if (data.windows && data.windows.length) {
+    addInstancedGroup(data.windows, new THREE.MeshStandardMaterial({
+      color: 0xdff0ff, emissive: 0xcfe8ff, emissiveIntensity: 0.75,
+      transparent: true, opacity: 0.34, roughness: 0.05, depthWrite: false,
+    }));
+  }
+
+  // Floor: a single oak-toned InstancedMesh for every walkable cell. This used to be one
+  // mesh per room colour; see FLOOR_COLOR above for why that went. Note the material must
+  // stay a plain per-mesh colour -- an earlier attempt at per-instance vertexColors
+  // rendered solid black, because InstancedMesh.instanceColor needs the base geometry to
+  // carry its own colour attribute to multiply against and PlaneGeometry has none.
   roomIdOf = computeRoomIds(data);
   const floorTileGeometry = new THREE.PlaneGeometry(data.cellSize, data.cellSize);
   floorTileGeometry.rotateX(-Math.PI / 2);
-  const floorCellsByColor = new Map();
+  const floorCells = [];
   for (let r = 0; r < data.height; r++) {
     for (let c = 0; c < data.width; c++) {
-      const id = roomIdOf(r, c);
-      if (id === null) continue; // wall cell, no floor tile here
-      const color = id < 0 ? ORPHAN_DOORWAY_COLOR : ROOM_PALETTE[id % ROOM_PALETTE.length];
-      if (!floorCellsByColor.has(color)) floorCellsByColor.set(color, []);
-      floorCellsByColor.get(color).push({
+      if (roomIdOf(r, c) === null) continue; // wall cell, no floor tile here
+      floorCells.push({
         x: c * data.cellSize,
         // nudged just below y=0 -- every wall's bottom face sits exactly at y=0
         // (see LevelBuilder.java's y = wallHeight/2), so a coplanar floor is
@@ -658,36 +664,53 @@ function buildLevel(data) {
       });
     }
   }
-  for (const [color, cells] of floorCellsByColor) {
-    const mesh = new THREE.InstancedMesh(
-      floorTileGeometry, new THREE.MeshStandardMaterial({ color }), cells.length);
-    cells.forEach((cell, i) => {
-      matrix.identity();
-      matrix.setPosition(cell.x, cell.y, cell.z);
-      mesh.setMatrixAt(i, matrix);
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    scene.add(mesh);
-  }
+  const floorMesh = new THREE.InstancedMesh(
+    floorTileGeometry,
+    new THREE.MeshStandardMaterial({ color: FLOOR_COLOR, roughness: 0.75 }),
+    floorCells.length);
+  floorCells.forEach((cell, i) => {
+    matrix.identity();
+    matrix.setPosition(cell.x, cell.y, cell.z);
+    floorMesh.setMatrixAt(i, matrix);
+  });
+  floorMesh.instanceMatrix.needsUpdate = true;
+  scene.add(floorMesh);
 
-  // One stretched ceiling plane -- kept flat/uniform rather than per-room like the
-  // floor. Without it, looking through any doorway or gap (nothing bounds the space
-  // from above) shows the sky background straight through, which reads as
-  // broken/see-through rather than "this leads to another room."
-  const floorWidth = data.width * data.cellSize;
-  const floorDepth = data.height * data.cellSize;
-  const floorGeometry = new THREE.PlaneGeometry(floorWidth, floorDepth);
-  // Looks far too light as a hex, and renders as #233851 -- see the hemisphere ground
-  // color above. This surface only ever receives that one term, halved twice over by the
-  // Lambert 1/PI factor, so it has to start bright to land as visible dark navy.
-  const ceiling = new THREE.Mesh(floorGeometry, new THREE.MeshStandardMaterial({ color: 0xa8c0d8 }));
-  ceiling.rotation.x = Math.PI / 2;
-  ceiling.position.set(
-    (floorWidth - data.cellSize) / 2,
-    data.wallHeight + 0.01,
-    (floorDepth - data.cellSize) / 2
-  );
-  scene.add(ceiling);
+  // Ceiling: the same tiles as the floor, flipped, at wall height. Without a ceiling,
+  // looking through any doorway shows sky straight through, which reads as broken rather
+  // than "this leads to another room."
+  //
+  // Tiled over the interior rather than one stretched plane covering the whole grid.
+  // Now that the void outside the building isn't drawn, a full-extent plane would hang
+  // out past the exterior walls like a canopy and be plainly visible through every
+  // window. Reusing the floor's cell list means the ceiling stops exactly where the
+  // building does.
+  //
+  // Plain white, and it renders white. It used to need an absurdly bright hex just to
+  // land as dark navy, because a down-facing plane receives the hemisphere ground term
+  // and nothing else; the AmbientLight added above is normal-independent, so it lights
+  // the ceiling directly and this value is now simply the colour it looks.
+  const ceilingTileGeometry = new THREE.PlaneGeometry(data.cellSize, data.cellSize);
+  ceilingTileGeometry.rotateX(Math.PI / 2);
+  // The emissive is the fix for a ceiling that kept reading as a heavy grey lid. A
+  // down-facing surface catches no sun and no sky term, so the only lever that reaches it
+  // is normal-independent light -- and raising the global AmbientLight to compensate
+  // flattens every wall in the flat at the same time. Emissive lifts this one surface and
+  // nothing else, which is what a ceiling actually looks like: the brightest thing in the
+  // room, bouncing light back down.
+  const ceilingMesh = new THREE.InstancedMesh(
+    ceilingTileGeometry,
+    new THREE.MeshStandardMaterial({
+      color: 0xfdfbf7, roughness: 1.0, emissive: 0xfff8ec, emissiveIntensity: 0.34,
+    }),
+    floorCells.length);
+  floorCells.forEach((cell, i) => {
+    matrix.identity();
+    matrix.setPosition(cell.x, data.wallHeight - 0.01, cell.z);
+    ceilingMesh.setMatrixAt(i, matrix);
+  });
+  ceilingMesh.instanceMatrix.needsUpdate = true;
+  scene.add(ceilingMesh);
 }
 
 // ---------- dust motes ----------
@@ -728,10 +751,13 @@ function buildDust(data) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   const points = new THREE.Points(geometry, new THREE.PointsMaterial({
-    map: makeDustTexture(), color: 0x9fd8ff, size: 0.035, sizeAttenuation: true,
+    // Dialled well back from the old cool-blue 0.45. Against dark navy walls the motes
+    // read as atmosphere; against a bright finished interior the same settings read as
+    // dust on the lens, which is not what anyone wants in a viewing.
+    map: makeDustTexture(), color: 0xfff0d8, size: 0.022, sizeAttenuation: true,
     // depthWrite: false is mandatory -- otherwise every mote punches a hole in the ones
     // behind it and in the fog.
-    transparent: true, opacity: 0.45, depthWrite: false,
+    transparent: true, opacity: 0.16, depthWrite: false,
     blending: THREE.AdditiveBlending, fog: true,
   }));
   points.frustumCulled = false; // the cloud follows the camera; its bounding sphere is stale by design
@@ -821,9 +847,12 @@ function bakeMinimap(data) {
     for (let c = 0; c < cols; c++) {
       const cell = rowStr[c];
       let rr, gg, bb;
-      // Drafting palette: navy walls, bright cyan doorways, pale floor.
+      // The minimap stays a drafting-style plan view -- it is a map, and a map should
+      // look like one even though the world it describes now looks like a home.
       if (cell === '1') { rr = 16; gg = 38; bb = 60; }
       else if (cell === '3') { rr = 79; gg = 195; bb = 247; }
+      else if (cell === '4') { rr = 240; gg = 210; bb = 90; } // window, matching the overlay PNG
+      else if (cell === '5') { rr = 8; gg = 18; bb = 30; }    // void outside the building
       else { rr = 150; gg = 180; bb = 205; }
       const idx = (r * cols + c) * 4;
       image.data[idx] = rr; image.data[idx + 1] = gg; image.data[idx + 2] = bb; image.data[idx + 3] = 255;
@@ -1038,7 +1067,10 @@ function collides(x, z) {
 
   for (let rr = rowMin; rr <= rowMax; rr++) {
     for (let c = colMin; c <= colMax; c++) {
-      if (cellAt(rr, c) === '1') return true;
+      // '4' (window) and '5' (void beyond the building) block as surely as '1' does.
+      // Glass is see-through, not walk-through; the void is invisible, not absent.
+      const cell = cellAt(rr, c);
+      if (cell === '1' || cell === '4' || cell === '5') return true;
     }
   }
   return false;
@@ -1161,5 +1193,20 @@ function animate() {
   updateHud();
   renderer.render(scene, camera);
 }
+
+// Dev hook for server.py's /api/screenshot endpoint. The render loop is driven by
+// requestAnimationFrame, which browsers suspend entirely whenever the page is not
+// visible, so an automated check has no frames to capture and no way to look at the one
+// output this project exists to produce. Exposing the renderer allows a render to be
+// driven on demand:
+//
+//   const { renderer, scene, camera } = window.__preview;
+//   renderer.render(scene, camera);
+//   const url = renderer.domElement.toDataURL('image/png');  // must be the NEXT statement
+//
+// toDataURL has to run synchronously after render(): the drawing buffer is not preserved
+// (preserveDrawingBuffer costs every real frame to help only this path), so it is valid
+// only until the next composite.
+window.__preview = { renderer, scene, camera, controls, THREE };
 
 animate();

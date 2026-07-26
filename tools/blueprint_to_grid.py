@@ -3,14 +3,25 @@ Converts an architectural floor-plan image (PNG/JPG/PDF) into the same 1/0/2 tex
 format that BlueprintReader.java already reads. See the plan for the full pipeline
 rationale; summary of stages:
 
-  load -> grayscale -> Otsu binarize -> auto-crop to ink -> downsample to grid by
-  ink-FRACTION per cell -> morphological close (seals double-line walls) ->
-  remove small blobs (kills label text / dimension noise) -> seal border ->
-  auto-place spawn (largest floor region, cell furthest from any wall) ->
-  write <name>.txt + <name>.overlay.png
+  load -> downscale to a working width -> grayscale -> Otsu binarize ->
+  OPENING by stroke thickness (deletes swing arcs, furniture, text, mullions; keeps
+  walls) -> auto-crop to ink -> downsample to grid by ink-FRACTION per cell ->
+  detect openings (gaps in wall lines) and split them into windows vs doorways ->
+  morphological close / blob cleanup on a re-sealed mask -> carve doorways (now only
+  a fallback) -> seal border -> auto-place spawn (largest floor region, cell furthest
+  from any wall) -> write <name>.txt + <name>.overlay.png
 
-The overlay PNG (walls tinted red, spawn marked green) is the main tuning tool:
-run this, look at the overlay, adjust --fill, re-run.
+Grid characters: 1 wall, 0 floor, 2 spawn, 3 doorway, 4 window (solid but transparent).
+
+The opening stage is the one that makes doorways land where the drawing puts them.
+Walls are drawn as thick filled bars and everything else -- swing arcs, door leaves,
+furniture, fixtures, labels, dimension lines, window mullions -- as thin strokes, so
+deleting thin strokes leaves real openings as literal holes in the wall lines. Before
+it existed, a door's swing arc sealed its own doorway shut and carve_doorways punched
+replacement holes wherever it could find a thin wall.
+
+The overlay PNG (walls red, doorways blue, windows yellow, spawn green) is the main
+tuning tool: run this, look at the overlay, adjust --stroke or --fill, re-run.
 """
 import argparse
 from collections import deque
@@ -28,6 +39,23 @@ from PIL import Image, ImageDraw
 # below the bad one.
 MAX_DOORWAY_OPENINGS = 9
 MAX_DOOR_CELL_FRACTION = 0.08
+
+# Everything on an architectural plan except the walls -- door swing arcs, door leaves,
+# furniture, plumbing fixtures, room labels, dimension lines, window mullions, closet
+# shelving -- is drawn as a THIN stroke. Walls are drawn as thick filled bars. That
+# thickness difference is the only reliable way to tell a wall from a symbol, and
+# separating them (see opening()) is what makes doorways land where the drawing puts
+# them instead of wherever carve_doorways could find a thin spot.
+#
+# Below this stroke thickness the two are no longer separable: on a ~220px-wide plan a
+# wall is 1-2px, thinner than a swing arc on a good scan, so no amount of processing
+# recovers the geometry. Refuse rather than build a plausible-looking wrong apartment.
+MIN_WALL_STROKE_PX = 4
+
+# Processing above this width buys nothing -- walls are already tens of pixels thick --
+# and every stage downstream is O(pixels). Also stabilises the stroke estimate, which
+# would otherwise report wildly different numbers for the same plan at two scan DPIs.
+MAX_WORK_WIDTH = 2000
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +149,15 @@ def find_main_component_bbox(ink: np.ndarray, preview_cols: int = 150):
 
 
 def autocrop(ink: np.ndarray, img: Image.Image, pad: int = 15):
+    """Crops to the building, returning (ink, image, bbox). The bbox is returned so the
+    caller can crop other full-resolution masks (see convert()'s opened copy) to exactly
+    the same window -- both must land on the same grid for their cells to be comparable.
+
+    This must be measured on the UN-opened ink: it locates the building as the largest
+    connected ink blob, and opening_by_reconstruction deliberately severs the wall
+    network at every door and window, so on the opened mask the largest blob is one
+    wall fragment rather than the building.
+    """
     y0, y1, x0, x1 = find_main_component_bbox(ink)
 
     x0 = max(0, x0 - pad)
@@ -130,7 +167,7 @@ def autocrop(ink: np.ndarray, img: Image.Image, pad: int = 15):
 
     ink_cropped = ink[y0:y1, x0:x1]
     img_cropped = img.crop((x0, y0, x1, y1))
-    return ink_cropped, img_cropped
+    return ink_cropped, img_cropped, (y0, y1, x0, x1)
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +218,73 @@ def erode(mask: np.ndarray) -> np.ndarray:
 
 def morphological_close(mask: np.ndarray) -> np.ndarray:
     return erode(dilate(mask))
+
+
+# ---------------------------------------------------------------------------
+# Stage 4b: separate walls from symbols by stroke thickness.
+#
+# This is the stage that fixes doorways. Previously a door's swing arc -- ink
+# sitting INSIDE the door opening -- thresholded the same as the wall beside it,
+# morphological_close fused the two, and the doorway sealed shut. Every room then
+# came out disconnected, and carve_doorways punched replacement openings wherever
+# it could find a thin wall, which is how a hole ended up between two bedrooms that
+# share no door in the drawing. (blueprints/apartment_demo.txt was hand-patched to
+# work around exactly this.) Deleting thin strokes first means the real openings
+# survive downsampling on their own and carve_doorways has nothing left to invent.
+# ---------------------------------------------------------------------------
+
+def estimate_stroke_px(ink: np.ndarray) -> int:
+    """The thickness, in pixels, that walls are drawn at.
+
+    Taken as the 75th percentile of horizontal ink run-lengths. Walls are the longest
+    features on the page, so a large share of all scanlines cross one, which puts wall
+    thickness in the upper quartile; annotation strokes are short-lived and fill the
+    lower one. Runs of 1px are dropped as anti-aliasing fringe and long runs are
+    dropped as horizontal walls measured end-on instead of across.
+
+    Measured on the two real sample plans: this returns 12px and 10px, against true
+    wall strokes of ~12 and ~10. The MODE is not usable here -- it returns 2px on a
+    photographed plan, because JPEG fringing and hatching generate far more 2px runs
+    than there are walls, even though the walls dominate total ink.
+    """
+    limit = max(4, ink.shape[1] // 20)
+    lengths = []
+    for row in ink:
+        padded = np.concatenate(([0], row.astype(np.int8), [0]))
+        deltas = np.diff(padded)
+        starts = np.flatnonzero(deltas == 1)
+        run = np.flatnonzero(deltas == -1) - starts
+        run = run[(run >= 2) & (run <= limit)]
+        if run.size:
+            lengths.append(run)
+    return int(np.percentile(np.concatenate(lengths), 75)) if lengths else 0
+
+
+def opening_by_reconstruction(mask: np.ndarray, radius: int) -> np.ndarray:
+    """Deletes every shape thinner than 2*radius+1 px and restores the survivors to
+    their ORIGINAL thickness. Reuses the 3x3 dilate/erode above, applied radius times --
+    an N-iteration 3x3 pass is an N-radius structuring element.
+
+    The regrow step is constrained to the input mask (geodesic reconstruction) rather
+    than being a plain dilation, and that distinction is the whole ballgame. A plain
+    erode-then-dilate returns walls at roughly their eroded width, which at grid
+    resolution drops whole wall segments below the ink-fraction threshold: measured on
+    the Unit C1 plan, that punched the building envelope full of holes and left 75% of
+    the grid flooded as 'outside' with no interior floor at all. Regrowing into the
+    original ink instead brings every wall back to full width while the symbols -- which
+    lost their core entirely and have nothing to regrow from -- stay deleted.
+
+    Symbols that physically touch a wall (a door's swing arc meets the wall at its hinge)
+    do creep back radius+2 px from the contact point. That is a few pixels against a
+    doorway a hundred wide, so it never re-seals the opening.
+    """
+    core = mask
+    for _ in range(radius):
+        core = erode(core)
+    out = core
+    for _ in range(radius + 2):
+        out = dilate(out) & mask
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +463,72 @@ def outside_mask(wall_mask: np.ndarray) -> np.ndarray:
                 queue.append((nr, nc))
 
     return outside
+
+
+# ---------------------------------------------------------------------------
+# Stage 7b2: find the openings the drawing actually contains.
+#
+# The wall mask is built from the raw ink, exactly as it always was, so the building
+# envelope stays as solid as it has always been -- that path is load-bearing and every
+# attempt to build the envelope from the OPENED ink instead punched it full of holes
+# (measured on the Unit C1 plan: 75% of the grid flooded as 'outside', no interior
+# floor at all). Opening is used only as a CLASSIFIER: a wall cell that survives
+# opening is real wall, and one that doesn't is symbol ink -- a swing arc, a door
+# leaf, a window mullion -- that happened to threshold as wall.
+#
+# A door therefore reads, scanning ALONG its wall, as: real wall, a short stretch of
+# symbol ink, real wall. That signature is what this looks for. Scanning ACROSS the
+# same wall the run is only a wall thickness and is flanked by floor rather than wall,
+# so it does not match -- which is exactly what keeps a swing arc curving out into the
+# middle of a room from being mistaken for a doorway.
+# ---------------------------------------------------------------------------
+
+def _axis_wall_gaps(wall_mask: np.ndarray, symbol: np.ndarray,
+                     min_gap_cells: int, max_gap_cells: int) -> np.ndarray:
+    """Row-wise: inside each maximal run of wall cells, mark sub-runs made entirely of
+    symbol ink that have real wall on BOTH sides and whose length falls between
+    min_gap_cells and max_gap_cells."""
+    out = np.zeros_like(wall_mask)
+    rows, cols = wall_mask.shape
+    for r in range(rows):
+        c = 0
+        while c < cols:
+            if not wall_mask[r, c]:
+                c += 1
+                continue
+            run_start = c
+            while c < cols and wall_mask[r, c]:
+                c += 1
+            run_end = c
+            k = run_start
+            while k < run_end:
+                if not symbol[r, k]:
+                    k += 1
+                    continue
+                gap_start = k
+                while k < run_end and symbol[r, k]:
+                    k += 1
+                # gap_start > run_start and k < run_end mean real wall on either side,
+                # within this same wall run -- i.e. a hole punched through a wall line.
+                width = k - gap_start
+                if (gap_start > run_start and k < run_end
+                        and min_gap_cells <= width <= max_gap_cells):
+                    out[r, gap_start:k] = True
+    return out
+
+
+def find_wall_gaps(wall_mask: np.ndarray, symbol: np.ndarray,
+                    min_gap_cells: int, max_gap_cells: int) -> np.ndarray:
+    """Boolean mask of cells where symbol ink is plugging a hole through a wall line.
+
+    min_gap_cells is what keeps the classifier's own noise out of the level. Opening does
+    not agree with the raw ink cell-for-cell along a wall's edge, so isolated one- and
+    two-cell disagreements appear inside otherwise solid walls; without a floor on the
+    width, those became 0.15m 'doorways' complete with lintels. Nothing narrower than a
+    person is a door or a window on any real plan.
+    """
+    return (_axis_wall_gaps(wall_mask, symbol, min_gap_cells, max_gap_cells)
+            | _axis_wall_gaps(wall_mask.T, symbol.T, min_gap_cells, max_gap_cells).T)
 
 
 # ---------------------------------------------------------------------------
@@ -608,16 +778,24 @@ def place_spawn(wall_mask: np.ndarray):
 # Stage 9: write grid text + overlay PNG
 # ---------------------------------------------------------------------------
 
-def write_grid(wall_mask: np.ndarray, spawn_rc, door_cells: set, out_path: Path, header_lines):
+def write_grid(wall_mask: np.ndarray, spawn_rc, door_cells: set, window_cells: set,
+                void_cells: set, out_path: Path, header_lines):
     rows, cols = wall_mask.shape
     lines = list(header_lines)
     for r in range(rows):
         chars = []
         for c in range(cols):
+            # Windows and void are both checked before the wall test because both ARE
+            # wall in wall_mask: glass is solid but not opaque, and the void beyond the
+            # building is solid but not drawn.
             if (r, c) == spawn_rc:
                 chars.append("2")
             elif (r, c) in door_cells:
                 chars.append("3")
+            elif (r, c) in window_cells:
+                chars.append("4")
+            elif (r, c) in void_cells:
+                chars.append("5")
             elif wall_mask[r, c]:
                 chars.append("1")
             else:
@@ -628,24 +806,30 @@ def write_grid(wall_mask: np.ndarray, spawn_rc, door_cells: set, out_path: Path,
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_overlay(wall_mask: np.ndarray, spawn_rc, door_cells: set, cropped_img: Image.Image,
-                   row_edges: np.ndarray, col_edges: np.ndarray, out_path: Path):
+def write_overlay(wall_mask: np.ndarray, spawn_rc, door_cells: set, window_cells: set,
+                   cropped_img: Image.Image, row_edges: np.ndarray, col_edges: np.ndarray,
+                   out_path: Path):
     rows, cols = wall_mask.shape
     base = cropped_img.convert("RGBA")
     tint = Image.new("RGBA", base.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(tint)
 
+    def fill_cell(r, c, color):
+        draw.rectangle(
+            [col_edges[c], row_edges[r], col_edges[c + 1] - 1, row_edges[r + 1] - 1], fill=color)
+
     for r in range(rows):
         for c in range(cols):
             if wall_mask[r, c]:
-                draw.rectangle(
-                    [col_edges[c], row_edges[r], col_edges[c + 1] - 1, row_edges[r + 1] - 1],
-                    fill=(255, 0, 0, 110))
+                fill_cell(r, c, (255, 0, 0, 110))
 
     for r, c in door_cells:
-        draw.rectangle(
-            [col_edges[c], row_edges[r], col_edges[c + 1] - 1, row_edges[r + 1] - 1],
-            fill=(0, 120, 255, 150))
+        fill_cell(r, c, (0, 120, 255, 150))
+
+    # Yellow, so a misdetected window is obvious against the blue doorways -- the two
+    # failure modes look identical in the grid text but completely different in 3D.
+    for r, c in window_cells:
+        fill_cell(r, c, (255, 220, 0, 170))
 
     sr, sc = spawn_rc
     cx = (col_edges[sc] + col_edges[sc + 1]) // 2
@@ -663,10 +847,38 @@ def write_overlay(wall_mask: np.ndarray, spawn_rc, door_cells: set, cropped_img:
 
 def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: float,
             wall_height: float, dpi: int, invert: bool, min_region: int,
-            do_seal: bool, keep_largest_only: bool):
+            do_seal: bool, keep_largest_only: bool, stroke=None):
     img = load_image(image_path, dpi)
-    ink = binarize(img, invert)
-    ink_cropped, img_cropped = autocrop(ink, img)
+    if img.width > MAX_WORK_WIDTH:
+        img = img.resize((MAX_WORK_WIDTH, round(img.height * MAX_WORK_WIDTH / img.width)),
+                          Image.LANCZOS)
+
+    ink_raw = binarize(img, invert)
+
+    stroke_px = stroke if stroke is not None else estimate_stroke_px(ink_raw)
+    if stroke_px < MIN_WALL_STROKE_PX:
+        raise ValueError(
+            f"This image is too low-resolution to convert accurately: its walls are drawn "
+            f"only ~{stroke_px}px thick, which is too thin to tell apart from door swing "
+            "arcs and furniture symbols. Upload a floor plan at least ~1000px wide -- the "
+            "original PDF, or a full-size screenshot rather than a thumbnail.")
+
+    # Opening deletes anything thinner than 2*radius+1, so radius has to clear half the
+    # thickest symbol stroke while staying under half a wall's. A third of the wall
+    # thickness sits comfortably between the two on every plan measured here (walls
+    # ~10px, arcs ~3px). Capped so a very large scan doesn't erode genuine thin
+    # partitions, and floored at 1 so this stage always does something.
+    radius = int(np.clip(round(stroke_px / 3), 1, 8))
+    ink_solid = opening_by_reconstruction(ink_raw, radius)
+    if not ink_solid.any():
+        raise ValueError(
+            f"Stripping symbol strokes (estimated wall thickness {stroke_px}px) erased the "
+            "whole drawing, meaning no wall was drawn thicker than the annotations. Pass "
+            "--stroke to override the estimate, or upload a higher-resolution plan.")
+
+    ink_cropped, img_cropped, bbox = autocrop(ink_raw, img)
+    y0, y1, x0, x1 = bbox
+    solid_cropped = ink_solid[y0:y1, x0:x1]
 
     # Auto-select grid resolution from the source image's cropped width when the
     # caller doesn't pin one: too few columns on a high-res plan wastes real detail,
@@ -675,15 +887,11 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     cropped_width_px = ink_cropped.shape[1]
     if cols is None:
         cols = int(np.clip(round(cropped_width_px / 8), 96, 160))
-    px_per_cell = cropped_width_px / cols
-    if px_per_cell < 4:
-        print(f"WARNING: source image is only {cropped_width_px}px wide after cropping "
-              f"({px_per_cell:.1f}px/cell at {cols} columns) -- fine detail like thin "
-              "walls and doorways may not resolve cleanly. A higher-resolution source "
-              "image will convert more accurately.")
 
     wall_mask, row_edges, col_edges = downsample_to_grid(ink_cropped, cols, fill)
+    wall_solid, _, _ = downsample_to_grid(solid_cropped, cols, fill)
     rows_actual, cols_actual = wall_mask.shape
+    cell_size = width_metres / cols_actual
 
     # Closing is always on now: measured on the real test image, closing+carving
     # reaches 100% reachability at every resolution while closing-off is worse at
@@ -696,7 +904,35 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
 
     wall_mask = prune_wall_tips(wall_mask)
 
-    cell_size = width_metres / cols_actual
+    # Wall cells with no counterpart in the opened mask are symbol ink, not wall.
+    symbol = wall_mask & ~wall_solid
+    # Narrowest credible opening is roughly a slim internal door; widest is a patio slider.
+    min_gap_cells = max(3, round(0.55 / cell_size))
+    max_gap_cells = max(min_gap_cells + 1, round(2.6 / cell_size))
+    openings = find_wall_gaps(wall_mask, symbol, min_gap_cells, max_gap_cells)
+
+    # Classify each opening by asking the question directly rather than by measuring a
+    # distance to the exterior: tentatively cut it, and see whether the outdoors gets in.
+    # If it does, this opening is in the building envelope -- a window, or a balcony
+    # slider, which is glass too -- so put it back and record it as glass. If it doesn't,
+    # it is an interior doorway and stays open. Same tentative-then-verify pattern
+    # carve_doorways already uses, and for the same reason: a distance heuristic gets the
+    # envelope wrong somewhere on every real plan, and one wrong call floods the outdoors
+    # through the whole interior and leaves the level with no floor at all.
+    #
+    # Windows staying solid is deliberate: glass blocks the player, it just isn't opaque.
+    baseline_outside = int(outside_mask(wall_mask).sum())
+    window_cells, detected_door_cells = set(), set()
+    opening_labels, opening_sizes = connected_components(openings, connectivity=8)
+    for label_id in range(len(opening_sizes)):
+        component = opening_labels == label_id
+        cells = set(zip(*(axis.tolist() for axis in np.where(component))))
+        wall_mask[component] = False
+        if int(outside_mask(wall_mask).sum()) > baseline_outside:
+            wall_mask[component] = True
+            window_cells |= cells
+        else:
+            detected_door_cells |= cells
     # Earlier this was blown out to 1.725m ("go wide enough that no plausible
     # remaining subtlety can matter") while chasing doorway-stuck reports that
     # turned out to be collision bugs in main.js's collides() (asymmetric
@@ -719,32 +955,44 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     # extra depth was never actually needed for connectivity.
     max_thickness = max(2, round(0.3 / cell_size))
     min_room = max(8, cols_actual // 4)
-    wall_mask, door_cells = carve_doorways(wall_mask, min_room, max_thickness, door_cells_wide)
+    wall_mask, carved_cells = carve_doorways(wall_mask, min_room, max_thickness, door_cells_wide)
+    door_cells = detected_door_cells | carved_cells
+    window_cells -= carved_cells  # a carve through glass makes it a doorway, not a window
 
-    # Sanity check: carve_doorways exists to bridge the handful of real doorways a
-    # dwelling has (measured: a real apartment plan needs ~3 openings, ~1.6% of the
-    # interior). If it had to carve far more than that, the input almost certainly
-    # isn't a clean top-down plan -- most likely a section/elevation view, where thick
-    # hatching for floors/roof/foundation reads as wall almost everywhere and shatters
-    # the interior into dozens of disconnected pixels (measured on a real section
-    # image: 11 openings, 10.2%). Fail loudly here instead of silently building a level
-    # nobody can meaningfully walk.
-    door_mask = np.zeros_like(wall_mask)
-    for r, c in door_cells:
-        door_mask[r, c] = True
-    _, door_opening_sizes = connected_components(door_mask, connectivity=8)
+    # Sanity check, now measured on what carve_doorways had to INVENT rather than on
+    # every doorway in the level. Openings detected from the drawing are legitimate and
+    # a real plan has a dozen or more of them, so counting those here would fail every
+    # honest apartment. Carving, though, only happens when detection missed something:
+    # near zero means the drawing was read correctly, and a large number means the input
+    # almost certainly isn't a clean top-down plan -- most likely a section/elevation
+    # view, where thick hatching for floors/roof/foundation reads as wall almost
+    # everywhere and shatters the interior into dozens of disconnected pixels (measured
+    # on a real section image: 11 openings, 10.2%). Fail loudly rather than silently
+    # building a level nobody can meaningfully walk.
+    carved_mask = np.zeros_like(wall_mask)
+    for r, c in carved_cells:
+        carved_mask[r, c] = True
+    _, carved_opening_sizes = connected_components(carved_mask, connectivity=8)
     interior_cell_count = int((~wall_mask & ~outside_mask(wall_mask)).sum())
-    door_fraction = len(door_cells) / max(interior_cell_count, 1)
-    if len(door_opening_sizes) > MAX_DOORWAY_OPENINGS or door_fraction > MAX_DOOR_CELL_FRACTION:
+    carved_fraction = len(carved_cells) / max(interior_cell_count, 1)
+    if len(carved_opening_sizes) > MAX_DOORWAY_OPENINGS or carved_fraction > MAX_DOOR_CELL_FRACTION:
         raise ValueError(
-            f"This doesn't look like a clean top-down floor plan: the converter needed "
-            f"to carve {len(door_opening_sizes)} separate doorway openings "
-            f"({door_fraction * 100:.0f}% of the interior) to reconnect regions that came "
-            "out disconnected -- a real floor plan needs a handful, not this many. This "
-            "usually means the image is a section/elevation view, a very noisy scan, or "
-            "otherwise not a clean top-down plan. Upload a top-down floor plan instead.")
+            f"This doesn't look like a clean top-down floor plan: after reading the "
+            f"drawing's own doors, the converter still had to carve "
+            f"{len(carved_opening_sizes)} extra openings ({carved_fraction * 100:.0f}% of "
+            "the interior) to reconnect regions that came out disconnected -- a real floor "
+            "plan needs none, or a handful at most. This usually means the image is a "
+            "section/elevation view, a very noisy scan, or otherwise not a clean top-down "
+            "plan. Upload a top-down floor plan instead.")
 
+    # The region seal_border is about to fill is the void beyond the building, not
+    # architecture. It has to stay SOLID so the player can never walk out into nothing,
+    # but drawing it means every window looks onto a blank wall standing centimetres
+    # away -- which defeats the entire point of detecting windows. Record it as '5':
+    # solid to collision, invisible to the renderer, so a window shows sky.
+    void_cells = set()
     if do_seal:
+        void_cells = set(zip(*(axis.tolist() for axis in np.where(outside_mask(wall_mask)))))
         wall_mask = seal_border(wall_mask)
 
     spawn_rc, reachable_fraction = place_spawn(wall_mask)
@@ -757,19 +1005,30 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
         f"# generated by blueprint_to_grid.py from {image_path.name}",
         f"# cols={cols_actual} rows={rows_actual} fill={fill} cellSize={cell_size:.4f} wallHeight={wall_height}",
     ]
-    write_grid(wall_mask, spawn_rc, door_cells, out_txt, header)
-    write_overlay(wall_mask, spawn_rc, door_cells, img_cropped, row_edges, col_edges, out_overlay)
+    write_grid(wall_mask, spawn_rc, door_cells, window_cells, void_cells, out_txt, header)
+    write_overlay(wall_mask, spawn_rc, door_cells, window_cells, img_cropped,
+                   row_edges, col_edges, out_overlay)
 
     wall_count = int(wall_mask.sum())
-    print(f"Grid: {cols_actual}x{rows_actual}  walls={wall_count}  doors={len(door_cells)}  "
+    print(f"Grid: {cols_actual}x{rows_actual}  walls={wall_count}  "
+          f"doors={len(door_cells)} (carved {len(carved_cells)})  windows={len(window_cells)}  "
           f"spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
+    print(f"Wall stroke measured at {stroke_px}px -> opening radius {radius}")
     print(f"cellSize = {width_metres} / {cols_actual} = {cell_size:.4f} m/cell")
+    # The single most common way to get a bizarre-looking walkthrough is an honest typo
+    # here: architectural drawings are dimensioned in millimetres, and every room, doorway
+    # and ceiling scales off this one number. Printing the resulting footprint lets it be
+    # checked against the dimensions printed on the plan in about two seconds.
+    print(f"Footprint: {cols_actual * cell_size:.1f} x {rows_actual * cell_size:.1f} m -- "
+          "compare against the plan's printed dimensions; re-run with a corrected "
+          "--width-metres if this is off.")
     print(f"Reachable interior floor from spawn: {reachable_fraction * 100:.1f}%")
     if reachable_fraction < 0.999:
         print("WARNING: not all interior floor is reachable from the spawn point -- "
               f"a room is still isolated. Check {out_overlay}")
     print(f"Wrote {out_txt}")
-    print(f"Wrote {out_overlay}  (walls red, carved doorways blue, spawn green -- inspect this)")
+    print(f"Wrote {out_overlay}  (walls red, doorways blue, windows yellow, "
+          "spawn green -- inspect this)")
 
     return out_txt, cell_size, wall_height, reachable_fraction, wall_count
 
@@ -793,6 +1052,11 @@ def main():
                          help="Set if the plan is light lines on a dark background")
     parser.add_argument("--min-region", type=int, default=6,
                          help="Minimum connected wall-cell count to keep (default: 6)")
+    parser.add_argument("--stroke", type=int, default=None,
+                         help="Wall stroke thickness in pixels, overriding the automatic "
+                              "estimate. Raise it if symbols (swing arcs, furniture) are "
+                              "surviving as walls; lower it if real walls are vanishing. "
+                              "Check the overlay PNG after changing this.")
     parser.add_argument("--no-seal", dest="do_seal", action="store_false",
                          help="Disable sealing the outer border as a wall")
     parser.add_argument("--keep-all-components", dest="keep_largest_only", action="store_false",
@@ -805,7 +1069,7 @@ def main():
 
     convert(args.image, args.out, args.cols, args.fill, args.width_metres,
             args.wall_height, args.dpi, args.invert, args.min_region,
-            args.do_seal, args.keep_largest_only)
+            args.do_seal, args.keep_largest_only, args.stroke)
 
 
 if __name__ == "__main__":
