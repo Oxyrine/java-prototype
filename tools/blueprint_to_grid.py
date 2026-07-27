@@ -61,6 +61,17 @@ MAX_DOOR_CELL_FRACTION = 0.08
 # recovers the geometry. Refuse rather than build a plausible-looking wrong apartment.
 MIN_WALL_STROKE_PX = 4
 
+# Narrowest source image worth converting. This is the number the low-resolution refusal
+# has always quoted; it is enforced now because the stroke test alone let a 723px plan
+# through (6px walls) and produced a flat with no doorways at all.
+MIN_PLAN_WIDTH_PX = 1000
+
+# Below this share of the interior reachable from the spawn, the conversion is refused
+# rather than handed over with a warning attached. A level where you are sealed into one
+# room is not a walkthrough with a caveat, it is a failure -- and it reads to whoever
+# uploaded it as the whole product being broken.
+MIN_REACHABLE_FRACTION = 0.9
+
 # Longest protruding wall spur treated as leftover ink rather than architecture. A real
 # partition runs between two things; a stub that dead-ends after 20cm is a counter edge or
 # a fitting, and once extruded it is a pillar standing in the room for no reason.
@@ -1065,6 +1076,19 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
         img = img.resize((MAX_WORK_WIDTH, round(img.height * MAX_WORK_WIDTH / img.width)),
                           Image.LANCZOS)
 
+    # The stroke test below is the principled one, but on its own it is not enough: a 723px
+    # copy of a plan measured 6px walls, sailed through it, and converted into an apartment
+    # with zero doorways where 45% of the floor was walled off from the spawn. The wall ink
+    # survives being shrunk; the DOOR GAPS do not, because a gap only has to close by a
+    # couple of pixels to stop being a gap. So hold the width the refusal message has always
+    # promised, rather than only the stroke thickness.
+    if img.width < MIN_PLAN_WIDTH_PX:
+        raise ValueError(
+            f"This plan is only {img.width}px wide, and needs to be at least "
+            f"{MIN_PLAN_WIDTH_PX}px. Below that the door openings close up as the image is "
+            "reduced to a grid, and the result is a set of sealed rooms rather than a flat. "
+            "Upload the original PDF, or a full-size export rather than a preview image.")
+
     ink_raw = binarize(img, invert)
 
     stroke_px = stroke if stroke is not None else estimate_stroke_px(ink_raw)
@@ -1299,6 +1323,15 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
         print("WARNING: not all interior floor is reachable from the spawn point -- "
               f"a room is still isolated. Check {out_overlay}")
     print(f"Wrote {out_txt}")
+    # Written first, then judged: the overlay is the only way to see WHY it came out wrong,
+    # so it has to exist even when the conversion is about to be rejected.
+    if reachable_fraction < MIN_REACHABLE_FRACTION:
+        raise ValueError(
+            f"Only {reachable_fraction * 100:.0f}% of this floor plan is reachable from the "
+            "spawn point -- most of the flat came out as sealed rooms with no way between "
+            "them, so there is nothing to walk. This usually means the source image is too "
+            "small or too soft for the door openings to survive. Try the original PDF or a "
+            "larger export.")
     print(f"Wrote {out_overlay}  (walls red, doorways blue, windows yellow, "
           "spawn green -- inspect this)")
 

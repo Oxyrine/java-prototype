@@ -60,6 +60,20 @@ def border_reaches(grid, target_rc) -> bool:
 def demo():
     assert TEST_IMAGE.is_file(), f"Test image missing: {TEST_IMAGE}"
 
+    # This fixture is whatever was last uploaded through the web panel -- the real plan is
+    # private, so it is gitignored and cannot be committed. That makes it destructible: one
+    # upload of a preview-sized copy replaces the full-size plan every assertion below is
+    # calibrated against. Say so, rather than failing somewhere deep in the converter.
+    from PIL import Image
+    source_width = Image.open(TEST_IMAGE).width
+    if source_width < B.MIN_PLAN_WIDTH_PX:
+        raise SystemExit(
+            f"{TEST_IMAGE.name} is only {source_width}px wide, under the "
+            f"{B.MIN_PLAN_WIDTH_PX}px minimum. It holds the LAST UPLOADED plan, so a "
+            "low-resolution upload has overwritten the full-size one these tests need. "
+            "Re-upload the plan at full size (the original PDF or a large export) and "
+            "run this again.")
+
     out_txt, cell_size, wall_height, reachable_fraction, wall_count = B.convert(
         image_path=TEST_IMAGE, out_name="uploaded", cols=None, fill=0.12,
         width_metres=12.0, wall_height=2.5, dpi=200, invert=False,
