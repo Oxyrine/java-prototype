@@ -390,6 +390,74 @@ def keep_largest_wall_component(wall_mask: np.ndarray) -> np.ndarray:
 # doesn't. Only prune when there's no such continuation.
 # ---------------------------------------------------------------------------
 
+def _open_runs(open_mask: np.ndarray) -> np.ndarray:
+    """For each open cell, the shorter of its horizontal and vertical unbroken open runs.
+
+    That is the width of the tightest squeeze through the cell, which is what decides
+    whether a person fits through it.
+    """
+    both = []
+    for mask in (open_mask, open_mask.T):
+        runs = np.zeros(mask.shape, dtype=np.int32)
+        for r in range(mask.shape[0]):
+            c = 0
+            row = mask[r]
+            while c < mask.shape[1]:
+                if not row[c]:
+                    c += 1
+                    continue
+                end = c
+                while end < mask.shape[1] and row[end]:
+                    end += 1
+                runs[r, c:end] = end - c
+                c = end
+        both.append(runs)
+    return np.minimum(both[0], both[1].T)
+
+
+def fill_impassable_gaps(wall_mask: np.ndarray, door_cells: set, min_pass: int):
+    """Fill open cells too tight for the player to stand in.
+
+    Rasterising a drawing at 20cm a cell leaves rubble: 40cm slots through a wall where the
+    ink thinned, one-cell alcoves beside a doorway, dead-end nicks between two wall runs.
+    None of it is space -- you cannot get into any of it -- but all of it is drawn, so it
+    reads as a wall full of mysterious slits.
+
+    Doorways are exempt. A doorway is narrow along its crossing axis by definition, so the
+    same test would brick up every door in the flat.
+
+    Filled per connected blob under the usual guard: if losing a blob would strand a space,
+    it stays. That should not happen -- nothing can reach through a gap it does not fit
+    through -- but the grid flood fill has no width, so it can disagree.
+    """
+    protected = set(door_cells)
+    for r, c in door_cells:  # a door's own threshold cells count as part of the door
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                protected.add((r + dr, c + dc))
+
+    open_mask = ~wall_mask
+    tight = (_open_runs(open_mask) < min_pass) & open_mask
+    for r, c in protected:
+        if 0 <= r < tight.shape[0] and 0 <= c < tight.shape[1]:
+            tight[r, c] = False
+
+    wall_mask = wall_mask.copy()
+    labels, sizes = connected_components(tight, connectivity=8)
+    _, regions = connected_components(~wall_mask, connectivity=4)
+    baseline = len(regions)
+    filled = 0
+    for label_id in range(len(sizes)):
+        component = labels == label_id
+        wall_mask[component] = True
+        _, regions = connected_components(~wall_mask, connectivity=4)
+        if len(regions) > baseline:
+            wall_mask[component] = False
+        else:
+            filled += int(sizes[label_id])
+    return wall_mask, filled
+
+
 def _floor_beyond(wall_mask, door_cells, r, c, dr, dc) -> bool:
     """Step outward from a door cell, straight through any further door cells (a doorway is
     often two cells thick), and report whether open floor lies on the far side."""
@@ -1110,6 +1178,10 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
         wall_mask, door_cells,
         max(3, round((player_radius * 2 + 0.15) / cell_size)), min_room)
 
+    # Anything left that the player cannot fit into is rubble, not architecture.
+    wall_mask, filled_gaps = fill_impassable_gaps(
+        wall_mask, door_cells, max(2, int(np.ceil(player_radius * 2 / cell_size))))
+
     # Sanity check, now measured on what carve_doorways had to INVENT rather than on
     # every doorway in the level. Openings detected from the drawing are legitimate and
     # a real plan has a dozen or more of them, so counting those here would fail every
@@ -1164,7 +1236,7 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     print(f"Grid: {cols_actual}x{rows_actual}  walls={wall_count}  "
           f"doors={len(door_cells)} (carved {len(carved_cells)})  windows={len(window_cells)}  "
           f"furniture dropped={removed_clutter}  blind door cells sealed={len(blind_cells)}  "
-          f"spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
+          f"impassable gaps filled={filled_gaps}  spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
     print(f"Wall stroke measured at {stroke_px}px -> opening radius {radius}")
     print(f"cellSize = {width_metres} / {cols_actual} = {cell_size:.4f} m/cell")
     # The single most common way to get a bizarre-looking walkthrough is an honest typo
