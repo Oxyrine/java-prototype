@@ -150,13 +150,36 @@ build of Three.js r185. Fetches `web/level01.json` on load. Highlights:
   cursor there) and click to toggle open/closed.
 - **Walls/floor** render as `InstancedMesh` grouped by material/color (one draw call per
   group), not one Mesh per cell — a real floor plan can have hundreds of wall pieces.
-- **Rooms**: flood-fill on the grid (`0`/`2` cells, `3` doorway cells excluded so they
-  act as room boundaries) assigns each room a color from a fixed palette, used for floor
-  tinting, the HUD room label, and the minimap's current-room highlight — all read the
-  same `roomIdOf` closure so they can't disagree.
+- **Rooms** (`computeRooms`): a watershed on wall clearance, not a flood fill. It measures
+  each floor cell's Chebyshev distance to the nearest non-floor cell (doorways count as
+  non-floor, so doored rooms separate for free), seeds a room at every blob with clearance
+  above `ROOM_CORE_FRACTION` × the plan's deepest clearance, then lets those cores claim
+  the remaining floor by simultaneous BFS. Spaces too narrow to seed anything (a 1.5 m
+  bathroom, a balcony strip) become rooms in a leftover pass.
+
+  This replaced a flood fill that assumed every room boundary was a wall with a door in
+  it. **Open plans break that outright** — on the Unit C1 plan living + kitchen + dining +
+  hall came out as one 330 m² region, so all of them reported `ROOM 01`. `roomIdOf` still
+  returns the same ids to the same three callers (floor tiling, HUD label, minimap
+  highlight); `rooms[id]` carries `{ name, short, area, anchor, parent }` alongside.
+- **Sub-rooms**: a room is nested under its biggest neighbour when it is *both* under
+  `SUBROOM_AREA_RATIO` of that neighbour **and** below the median room area. Both
+  conditions are needed — in an open plan every bedroom's biggest neighbour is the huge
+  living area, so the ratio alone demotes ordinary bedrooms. Named `ROOM 05a`, `ROOM 05b`.
+- `ROOM_CORE_FRACTION` is a **fitted constant**, and every threshold in `computeRooms` is
+  a ratio rather than a length, because the metre scale is the user's to type — the same
+  plan entered as 16 m and as 32 m wide must segment identically. `checkRoomSegmentation()`
+  warns if one region ever covers >75% of the floor again.
+- **Room names from the drawing** are plumbed but not produced: `computeRooms` will use
+  `data.roomLabels = [{ name, row, col }]` if the level JSON carries it, matching each
+  label to whichever room contains its cell. Emitting that array needs OCR, which the
+  converter deliberately does not do — no OCR dependency has been added, so rooms are
+  auto-numbered by size. The matching is positional, so nothing in `main.js` would need
+  to change if an OCR pass were added later.
 - **Minimap**: baked once to an offscreen canvas from the grid text, blitted scaled-up
   each frame with player position/facing drawn on top; per-room highlight overlays are
-  cached lazily per room.
+  cached lazily per room. Room numbers are a **second** baked layer at the canvas' own
+  resolution — the base map is one pixel per cell, far too coarse to draw text into.
 - **Dust motes**: one `Points` cloud, positions wrapped modulo a box centered on the
   camera (no spawn/despawn bookkeeping).
 - Conversion progress (upload panel) is honest about being indeterminate — `/api/convert`
