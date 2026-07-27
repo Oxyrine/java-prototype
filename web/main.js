@@ -733,11 +733,56 @@ function computeDoorways(data) {
 // hinge point) and open/swing state; animate() eases the leaf toward whichever state
 // the player last clicked it into -- see DOOR_* constants above for why this never
 // touches collision.
+// Is the leaf clear of solid geometry at this angle? Sampled along its length rather than
+// swept as a volume: the leaf is a thin flat board, so its edge is the only part that can
+// hit anything, and a handful of points along it is enough to catch a wall.
+function leafClearAt(data, hingeX, hingeZ, yaw, leafWidth) {
+  const cellSize = data.cellSize;
+  for (let t = 0.2; t <= 1.0001; t += 0.2) {
+    const reach = t * leafWidth;
+    // Three.js rotation about +Y sends local +x to (cos, -sin) in world (x, z).
+    const x = hingeX + Math.cos(yaw) * reach;
+    const z = hingeZ - Math.sin(yaw) * reach;
+    const col = Math.round(x / cellSize);
+    const row = data.height - 1 - Math.round(z / cellSize);
+    if (row < 0 || row >= data.height || col < 0 || col >= data.width) return false;
+    const cell = data.grid[row][col];
+    if (cell === '1' || cell === '4' || cell === '5') return false;
+  }
+  return true;
+}
+
+// The angle this door can actually open through, signed for the direction it opens.
+// Tries both ways and takes whichever has more room; a door boxed in on both sides ends
+// up with 0 and simply stays shut, which is honest -- something is in the way.
+const SWING_STEPS = 12;
+function swingLimit(data, hingeX, hingeZ, baseRotationY, leafWidth) {
+  let best = 0;
+  for (const sign of [1, -1]) {
+    let limit = 0;
+    for (let step = 1; step <= SWING_STEPS; step++) {
+      const angle = sign * (step / SWING_STEPS) * DOOR_OPEN_ANGLE;
+      if (!leafClearAt(data, hingeX, hingeZ, baseRotationY + angle, leafWidth)) break;
+      limit = angle;
+    }
+    if (Math.abs(limit) > Math.abs(best)) best = limit;
+  }
+  return best;
+}
+
 function buildDoors(data) {
   const doorways = computeDoorways(data);
   const cellSize = data.cellSize;
   const leafMaterial = new THREE.MeshStandardMaterial({ color: 0x6b4a30 });
   const leafGeometry = new THREE.BoxGeometry(1, 1, 1);
+  // A handle, because a plain brown board is not obviously a door -- it reads as a slab of
+  // something, which is exactly how a bricked-up cupboard opening read too. One lever each
+  // side, since a door is seen from both rooms. Modelled on the pivot rather than parented
+  // to the leaf: the leaf carries a non-uniform scale, which would stretch any child.
+  const handleMaterial = new THREE.MeshStandardMaterial({ color: 0x2e2a26, metalness: 0.6, roughness: 0.4 });
+  const handleGeometry = new THREE.BoxGeometry(0.12, 0.028, 0.028);
+  const HANDLE_HEIGHT = 1.02;   // metres -- standard lever height
+  const HANDLE_INSET = 0.07;    // from the leaf's free edge
   const doors = [];
 
   doorways.forEach(({ r0, r1, c0, c1 }) => {
@@ -778,7 +823,20 @@ function buildDoors(data) {
     leaf.position.set(DOOR_LEAF_CLEARANCE / 2 + leafWidth / 2, DOOR_HEIGHT / 2, 0);
     pivot.add(leaf);
 
-    const door = { pivot, leaf, baseRotationY, isOpen: false, currentSwing: 0 };
+    const handleX = DOOR_LEAF_CLEARANCE / 2 + leafWidth - HANDLE_INSET;
+    for (const side of [1, -1]) {
+      const handle = new THREE.Mesh(handleGeometry, handleMaterial);
+      handle.position.set(handleX, HANDLE_HEIGHT, side * (leafThickness / 2 + 0.014));
+      pivot.add(handle);
+    }
+
+    // Which way it opens, and how far. Every door used to swing the same way through a
+    // fixed 90 degrees, so half of them buried themselves in the wall beside the opening.
+    // A real door swings into the room and stops when it meets something; measured once
+    // here at build time, so the per-frame animation stays a single lerp.
+    const swing = swingLimit(data, hingeX, hingeZ, baseRotationY, leafWidth);
+
+    const door = { pivot, leaf, baseRotationY, openAngle: swing, isOpen: false, currentSwing: 0 };
     leaf.userData.door = door; // reverse lookup from a raycast hit, see updateDoorFocus()
     doors.push(door);
   });
@@ -1490,7 +1548,7 @@ function animate() {
 
     const swingSmoothing = 1 - Math.exp(-DOOR_SWING_RATE * delta);
     for (const door of doors) {
-      const targetSwing = door.isOpen ? DOOR_OPEN_ANGLE : 0;
+      const targetSwing = door.isOpen ? door.openAngle : 0;
       door.currentSwing += (targetSwing - door.currentSwing) * swingSmoothing;
       door.pivot.rotation.y = door.baseRotationY + door.currentSwing;
     }
