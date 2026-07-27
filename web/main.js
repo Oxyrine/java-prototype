@@ -672,10 +672,12 @@ function computeDoorways(data) {
     for (let c = 0; c < cols; c++) {
       if (grid[r][c] !== '3' || visited[idx(r, c)]) continue;
       const stack = [[r, c]];
+      const cells = [];
       visited[idx(r, c)] = 1;
       let r0 = r, r1 = r, c0 = c, c1 = c;
       while (stack.length) {
         const [cr, cc] = stack.pop();
+        cells.push([cr, cc]);
         r0 = Math.min(r0, cr); r1 = Math.max(r1, cr);
         c0 = Math.min(c0, cc); c1 = Math.max(c1, cc);
         for (let dr = -1; dr <= 1; dr++) {
@@ -689,7 +691,38 @@ function computeDoorways(data) {
           }
         }
       }
-      doorways.push({ r0, r1, c0, c1 });
+
+      // The along-axis bounds are narrowed from the component's bounding box to its
+      // longest straight run of cells. For a plain rectangular doorway -- nine of the ten
+      // on the Unit C1 plan -- the run IS the bounding box and nothing changes. It matters
+      // for the tenth: two doorways meeting at a corner flood-fill into one L-shaped
+      // component whose box is only 67% cells, and sizing a leaf to that box builds a door
+      // wider than the hole it sits in. The cross-axis bounds stay as the box, so a
+      // two-cell-thick doorway still centres its leaf between both rows.
+      const runs = (fixed, vary) => {
+        const lines = new Map();
+        for (const cell of cells) {
+          const key = cell[fixed];
+          if (!lines.has(key)) lines.set(key, []);
+          lines.get(key).push(cell[vary]);
+        }
+        let best = { length: 0, lo: 0, hi: 0 };
+        for (const line of lines.values()) {
+          line.sort((a, b) => a - b);
+          let lo = line[0];
+          for (let i = 1; i <= line.length; i++) {
+            if (i < line.length && line[i] === line[i - 1] + 1) continue;
+            const hi = line[i - 1];
+            if (hi - lo + 1 > best.length) best = { length: hi - lo + 1, lo, hi };
+            if (i < line.length) lo = line[i];
+          }
+        }
+        return best;
+      };
+      const alongRow = runs(0, 1); // longest run within a single row -> a horizontal opening
+      const alongCol = runs(1, 0);
+      if (alongRow.length >= alongCol.length) doorways.push({ r0, r1, c0: alongRow.lo, c1: alongRow.hi });
+      else doorways.push({ r0: alongCol.lo, r1: alongCol.hi, c0, c1 });
     }
   }
   return doorways;
@@ -861,7 +894,15 @@ function buildLevel(data) {
   const floorCells = [];
   for (let r = 0; r < data.height; r++) {
     for (let c = 0; c < data.width; c++) {
-      if (roomIdOf(r, c) === null) continue; // wall cell, no floor tile here
+      // Every cell inside the building gets a floor tile, including the ones under walls.
+      // Tiling only the walkable cells looks identical everywhere the wall geometry lines
+      // up with the grid -- and leaves a hole straight through to the sky everywhere it
+      // doesn't. It doesn't, on every diagonal wall: a staircase run of '1' cells is drawn
+      // as one thin rotated box (see angledBox in LevelBuilder), so the cells making up the
+      // staircase's extra thickness end up with no wall over them and no floor under them.
+      // Measured 20 such cells on the Unit C1 plan, all of them on the five diagonal runs.
+      // Tiles hidden under a wall cost one instance each and can never be wrong.
+      if (data.grid[r][c] === '5') continue; // void outside the building -- never drawn
       floorCells.push({
         x: c * data.cellSize,
         // nudged just below y=0 -- every wall's bottom face sits exactly at y=0
