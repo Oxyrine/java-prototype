@@ -110,6 +110,25 @@ def demo():
             f"({span * cell_size:.2f}m), under the {min_door_cells}-cell walkable minimum")
     print(f"    doorway widths: {min(spans) * cell_size:.2f}m - {max(spans) * cell_size:.2f}m")
 
+    # ...and must have something to hinge against at BOTH ends. The stub prune peels
+    # dead-ending wall, and the pier between two openings is short and dead-ends by
+    # nature -- prune it and the door leaf is left hanging in the room beside its hole.
+    solid = frozenset("145")
+    for label_id in range(len(sizes)):
+        rs, cs_ = np.where(labels == label_id)
+        r0, r1, c0, c1 = int(rs.min()), int(rs.max()), int(cs_.min()), int(cs_.max())
+        if (c1 - c0) >= (r1 - r0):
+            mid = (r0 + r1) // 2
+            ends = [(mid, c0 - 1), (mid, c1 + 1)]
+        else:
+            mid = (c0 + c1) // 2
+            ends = [(r0 - 1, mid), (r1 + 1, mid)]
+        jambs = sum(1 for r, c in ends
+                    if 0 <= r < rows and 0 <= c < cols and grid[r][c] in solid)
+        assert jambs == 2, (
+            f"Doorway component {label_id} at row{r0} col{c0} has wall at only "
+            f"{jambs}/2 ends -- its door leaf would hang with nothing to hinge against")
+
     print(f"OK: {cols}x{rows} grid, {wall_count} walls, {len(sizes)} doorways, "
           f"{window_count} window cells, spawn at {spawn_rc}, "
           f"{reachable_fraction * 100:.1f}% interior reachable, cellSize={cell_size:.4f}")

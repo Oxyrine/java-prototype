@@ -949,9 +949,13 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     # A spur is a dead end, so removing it cannot open the envelope -- it encloses nothing.
     # Bounded rather than run to convergence, because convergence would happily eat a
     # genuinely dangling wall cell by cell all the way back to its root.
+    # Never prune a doorway's jamb. The pier between two openings is short and dead-ends
+    # by nature, so it looks exactly like debris -- but pruning it leaves the door leaf
+    # hinged on nothing, hanging in the room next to the hole it was supposed to fill.
+    jambs = dilate(openings) & wall_mask
     stub_passes = max(1, round(STUB_METRES / cell_size))
     for _ in range(stub_passes):
-        pruned = prune_wall_tips(wall_mask)
+        pruned = prune_wall_tips(wall_mask) | jambs
         if np.array_equal(pruned, wall_mask):
             break
         removed_clutter += int(wall_mask.sum() - pruned.sum())
