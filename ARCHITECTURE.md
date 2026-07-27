@@ -66,6 +66,14 @@ by tentatively cutting it and checking whether `outside_mask` grew: if the outdo
 in it is in the envelope (a window, or a balcony slider), otherwise it is an interior
 doorway.
 
+Symbol ink that turns out **not** to be plugging a doorway is furniture — a counter run, a
+hob, a wardrobe outline. Left standing it extrudes to full wall height, so the kitchen came
+out as a maze of 2.5 m slabs. It is deleted one connected blob at a time, each blob put back
+if `outside_mask` grew, for the same reason as above. Deleting it all in one pass does
+**not** work — reachability fell 100% → 65.7%, because the envelope is built from raw ink
+and some of what the opening rejected is genuinely load-bearing. On the Unit C1 plan this
+drops ~170 cells and takes `carve_doorways` from 67 invented cells to **0**.
+
 Before this existed, a door's swing arc sealed its own doorway shut, every room came out
 disconnected, and `carve_doorways` punched replacement holes wherever it found a thin wall
 — including between two bedrooms that share no door. `carve_doorways` remains as a safety

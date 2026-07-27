@@ -890,6 +890,7 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
 
     wall_mask, row_edges, col_edges = downsample_to_grid(ink_cropped, cols, fill)
     wall_solid, _, _ = downsample_to_grid(solid_cropped, cols, fill)
+    raw_mask = wall_mask.copy()  # before closing/pruning, to tell real ink from invented cells
     rows_actual, cols_actual = wall_mask.shape
     cell_size = width_metres / cols_actual
 
@@ -910,6 +911,29 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     min_gap_cells = max(3, round(0.55 / cell_size))
     max_gap_cells = max(min_gap_cells + 1, round(2.6 / cell_size))
     openings = find_wall_gaps(wall_mask, symbol, min_gap_cells, max_gap_cells)
+
+    # Symbol ink that isn't plugging a doorway is furniture, a fixture, a fitting -- drawn
+    # ON the floor, not built on it. Left standing it extrudes to full height, so a kitchen
+    # counter run and its hob become 2.5m walls and the flat reads as a maze of slabs.
+    #
+    # Deleting all of it at once does not work: reachability fell 100% -> 65.7%, because the
+    # envelope is deliberately built from RAW ink (opening severs the wall network, see
+    # opening_by_reconstruction) and some of what the opening rejected is load-bearing here.
+    # So delete it the way this file already decides everything else about the envelope --
+    # tentatively, one blob at a time, keeping any blob the outdoors comes through.
+    clutter = wall_mask & ~wall_solid & ~openings & raw_mask
+    clutter_labels, clutter_sizes = connected_components(clutter, connectivity=8)
+    outside_now = int(outside_mask(wall_mask).sum())
+    removed_clutter = 0
+    for label_id in range(len(clutter_sizes)):
+        component = clutter_labels == label_id
+        wall_mask[component] = False
+        grown = int(outside_mask(wall_mask).sum())
+        if grown > outside_now:
+            wall_mask[component] = True  # structural after all -- the outdoors got in
+        else:
+            outside_now = grown
+            removed_clutter += int(clutter_sizes[label_id])
 
     # Classify each opening by asking the question directly rather than by measuring a
     # distance to the exterior: tentatively cut it, and see whether the outdoors gets in.
@@ -1012,7 +1036,7 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     wall_count = int(wall_mask.sum())
     print(f"Grid: {cols_actual}x{rows_actual}  walls={wall_count}  "
           f"doors={len(door_cells)} (carved {len(carved_cells)})  windows={len(window_cells)}  "
-          f"spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
+          f"furniture dropped={removed_clutter}  spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
     print(f"Wall stroke measured at {stroke_px}px -> opening radius {radius}")
     print(f"cellSize = {width_metres} / {cols_actual} = {cell_size:.4f} m/cell")
     # The single most common way to get a bizarre-looking walkthrough is an honest typo
