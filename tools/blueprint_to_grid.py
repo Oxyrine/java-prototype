@@ -52,6 +52,11 @@ MAX_DOOR_CELL_FRACTION = 0.08
 # recovers the geometry. Refuse rather than build a plausible-looking wrong apartment.
 MIN_WALL_STROKE_PX = 4
 
+# Longest protruding wall spur treated as leftover ink rather than architecture. A real
+# partition runs between two things; a stub that dead-ends after 20cm is a counter edge or
+# a fitting, and once extruded it is a pillar standing in the room for no reason.
+STUB_METRES = 0.5
+
 # Processing above this width buys nothing -- walls are already tens of pixels thick --
 # and every stage downstream is O(pixels). Also stabilises the stroke estimate, which
 # would otherwise report wildly different numbers for the same plan at two scan DPIs.
@@ -934,6 +939,23 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
         else:
             outside_now = grown
             removed_clutter += int(clutter_sizes[label_id])
+
+    # Whatever survived as a protruding spur is debris too -- a counter edge drawn thick
+    # enough to pass for wall, a fitting, a stub of hatching. Extruded to full height it
+    # stands in the room as a pillar with no plan behind it, which reads worse than the
+    # furniture it came from. prune_wall_tips only ever peels ONE cell, so a 3-cell spur
+    # survived every pass; run it repeatedly instead.
+    #
+    # A spur is a dead end, so removing it cannot open the envelope -- it encloses nothing.
+    # Bounded rather than run to convergence, because convergence would happily eat a
+    # genuinely dangling wall cell by cell all the way back to its root.
+    stub_passes = max(1, round(STUB_METRES / cell_size))
+    for _ in range(stub_passes):
+        pruned = prune_wall_tips(wall_mask)
+        if np.array_equal(pruned, wall_mask):
+            break
+        removed_clutter += int(wall_mask.sum() - pruned.sum())
+        wall_mask = pruned
 
     # Classify each opening by asking the question directly rather than by measuring a
     # distance to the exterior: tentatively cut it, and see whether the outdoors gets in.

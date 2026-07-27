@@ -74,6 +74,14 @@ if `outside_mask` grew, for the same reason as above. Deleting it all in one pas
 and some of what the opening rejected is genuinely load-bearing. On the Unit C1 plan this
 drops ~170 cells and takes `carve_doorways` from 67 invented cells to **0**.
 
+Anything still standing as a **protruding spur** goes too — a counter edge drawn thick
+enough to pass the opening filter, a fitting, a stub of hatching. Extruded to full height
+it is a pillar in the middle of a room with nothing in the plan behind it. `prune_wall_tips`
+only ever peels one cell, so a 3-cell spur survived every pass; it now runs repeatedly, up
+to `STUB_METRES / cell_size` times. A spur is a dead end and encloses nothing, so this
+cannot open the envelope — but it is **bounded, never run to convergence**, because
+convergence eats a genuinely dangling wall cell by cell back to its root.
+
 Before this existed, a door's swing arc sealed its own doorway shut, every room came out
 disconnected, and `carve_doorways` punched replacement holes wherever it found a thin wall
 — including between two bedrooms that share no door. `carve_doorways` remains as a safety
