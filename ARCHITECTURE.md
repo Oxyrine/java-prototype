@@ -114,6 +114,15 @@ Entry point [Main.java](src/main/java/com/blueprint/Main.java) — CLI args
   sill, opaque header above, and a glass pane between, emitted into `LevelData.windows`
   so the renderer doesn't have to guess which walls are windows. `5` cells produce **no
   geometry at all**.
+- **Angled walls**: a run of small stepped rectangles is recognised as a rasterised
+  diagonal and replaced by one box with a `rotationY`, instead of a row of fins. The box is
+  thinner than the staircase it replaces, so `openUncovered()` then rewrites the grid,
+  flipping every staircase cell the box does not stand on back to `0`. **The grid is
+  serialised after `buildWalls`, not before** — collision, the minimap and room
+  segmentation all read that grid, and all three would otherwise place a wall where nothing
+  is drawn. Cells on the outside face become an unreachable pocket, never a way out: the
+  box spans the run unbroken. `checkSolidCellsAreDrawn()` in `main.js` warns if any solid
+  cell ever loses its geometry again.
 - [LevelExporter.java](src/main/java/com/blueprint/LevelExporter.java) — Gson
   pretty-printed JSON.
 - `model/` — `LevelData` (name, width, height, cellSize, wallHeight, spawn, grid strings,

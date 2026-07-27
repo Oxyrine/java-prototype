@@ -43,14 +43,11 @@ public class LevelBuilder {
         int rows = grid.length;
         int cols = grid[0].length;
 
-        List<String> gridStrings = new ArrayList<>();
         Vec3 spawn = null;
         int spawnRow = -1;
         int spawnCol = -1;
 
         for (int row = 0; row < rows; row++) {
-            gridStrings.add(new String(grid[row]));
-
             for (int col = 0; col < cols; col++) {
                 char cell = grid[row][col];
                 switch (cell) {
@@ -82,7 +79,15 @@ public class LevelBuilder {
         }
 
         List<WallData> walls = new ArrayList<>();
+        // Serialised only after this call: buildWalls opens the staircase cells its rotated
+        // boxes don't stand on, and the grid the client collides against has to be the one
+        // that matches the geometry it can see.
         walls.addAll(buildWalls(grid, rows, cols, cellSize, wallHeight));
+
+        List<String> gridStrings = new ArrayList<>();
+        for (int row = 0; row < rows; row++) {
+            gridStrings.add(new String(grid[row]));
+        }
         if (wallHeight > DOOR_HEIGHT) {
             walls.addAll(extractRectangles(grid, '3', rows, cols, cellSize,
                     (DOOR_HEIGHT + wallHeight) / 2.0, wallHeight - DOOR_HEIGHT));
@@ -121,11 +126,10 @@ public class LevelBuilder {
     // rectangle sits directly after the previous one along one axis and is offset from it
     // by a small, consistent amount along the other.
     //
-    // Collision is deliberately NOT changed: it reads the grid, which still holds the
-    // staircase, so the walkable envelope is unchanged and none of the hard-won collision
-    // behaviour is at risk. The visible wall and the collision boundary therefore disagree
-    // by up to half a cell along these runs, which at a typical cellSize is a few
-    // centimetres -- far less noticeable than the fins were.
+    // Collision still reads the grid rather than testing the rotated box, so openUncovered()
+    // rewrites the grid to the box's own footprint instead. That keeps one source of truth:
+    // collision, the minimap and room segmentation all read the grid, and all three would
+    // otherwise report a wall standing where nothing is drawn.
     // ---------------------------------------------------------------------------
 
     /** A merged rectangle in GRID space, before it is turned into world geometry. */
@@ -152,7 +156,9 @@ public class LevelBuilder {
                 }
             }
             for (List<CellRect> run : findStaircases(remaining, rowStacked)) {
-                out.add(angledBox(run, rows, cellSize, wallHeight));
+                WallData box = angledBox(run, rows, cellSize, wallHeight);
+                out.add(box);
+                openUncovered(grid, box, run, rows, cellSize);
                 consumed.addAll(run);
             }
         }
@@ -266,6 +272,39 @@ public class LevelBuilder {
                 new Vec3((x0 + x1) / 2.0, wallHeight / 2.0, (z0 + z1) / 2.0),
                 new Vec3(length, wallHeight, thickness),
                 first.row(), first.col(), rotationY);
+    }
+
+    /**
+     * Frees the staircase cells the rotated box does not actually stand on.
+     *
+     * The box is thinner than the staircase it replaces, so without this the grid keeps
+     * blocking cells that nothing is drawn in and the player walks into an invisible wall.
+     * Opening them makes the collision grid and the geometry the same shape by construction
+     * -- which is the whole point, since collision, the minimap and room segmentation all
+     * read this grid and would otherwise each be wrong in the same place.
+     *
+     * Cells on the outside face become an unreachable pocket rather than a way out: the box
+     * spans the run unbroken, so opening cells beside it never opens a path through it.
+     */
+    private static void openUncovered(char[][] grid, WallData box, List<CellRect> run,
+                                       int gridRows, double cellSize) {
+        // Inverse of the Y rotation the renderer applies, so u is along the box's length
+        // and v across its thickness.
+        double ct = Math.cos(box.rotationY), st = Math.sin(box.rotationY);
+        double halfLength = box.size.x / 2.0, halfThickness = box.size.z / 2.0;
+        for (CellRect r : run) {
+            for (int row = r.row(); row < r.row() + r.rows(); row++) {
+                for (int col = r.col(); col < r.col() + r.width(); col++) {
+                    double dx = col * cellSize - box.position.x;
+                    double dz = (gridRows - 1 - row) * cellSize - box.position.z;
+                    double u = dx * ct - dz * st;
+                    double v = dx * st + dz * ct;
+                    if (Math.abs(u) > halfLength || Math.abs(v) > halfThickness) {
+                        grid[row][col] = '0';
+                    }
+                }
+            }
+        }
     }
 
     private static double centerX(CellRect r, double cellSize) {
