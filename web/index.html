@@ -26,13 +26,25 @@
     </div>
     <p id="loadLevelStatus"></p>
 
-    <h2>Load a blueprint image</h2>
+    <h2>Load a blueprint</h2>
     <p class="warnNote">Uploading re-runs the converter from scratch on the image below --
       any hand-edited fix to the current level will be overwritten. Use "Load a saved level"
       above to get back to a saved grid instead of re-uploading the same image.</p>
     <form id="uploadForm">
-      <label for="blueprintFile">Floor plan (PNG/JPG/PDF) &mdash; top-down view, not a section</label>
-      <input type="file" id="blueprintFile" name="image" accept="image/png,image/jpeg,.pdf" required />
+      <label for="blueprintFile">Floor plan file &mdash; <strong>.png, .jpg, .jpeg or .pdf</strong></label>
+      <input type="file" id="blueprintFile" name="image"
+             accept=".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf" required />
+      <!-- Every requirement listed here is one the converter actually enforces, so the
+           panel and the 400 it can return never disagree: the extension set matches
+           ALLOWED_SUFFIXES in server.py, the width comes from MIN_WALL_STROKE_PX in
+           blueprint_to_grid.py, and the dpi is the one server.py passes to convert(). -->
+      <p class="hintNote">Must be a <strong>top-down floor plan</strong> &mdash; not a
+        section, elevation, 3D render or site plan. At least <strong>~1000px wide</strong>:
+        below that, walls come out thinner than 4px and can't be told apart from door swing
+        arcs and furniture, so the upload is refused rather than converted into a wrong
+        apartment. The original PDF or a full-size export is ideal; a photo of a printed
+        plan works if the lines are sharp; a thumbnail will not. Multi-page PDFs use page 1
+        only, rendered at 200 dpi.</p>
 
       <label for="widthMetres">Building width (metres, e.g. 12 &mdash; not mm)</label>
       <!-- type="button" matters: this sits inside the form, and a default-type button

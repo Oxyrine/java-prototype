@@ -1,7 +1,16 @@
 ﻿"""
-Converts an architectural floor-plan image (PNG/JPG/PDF) into the same 1/0/2 text grid
-format that BlueprintReader.java already reads. See the plan for the full pipeline
-rationale; summary of stages:
+Converts an architectural floor plan into the same 1/0/2 text grid format that
+BlueprintReader.java already reads.
+
+Accepted input: a .png, .jpg, .jpeg or .pdf holding a TOP-DOWN floor plan -- not a
+section, elevation, 3D render or site plan. It must be at least ~1000px wide; below
+that, walls rasterise thinner than MIN_WALL_STROKE_PX and stop being distinguishable
+from door swing arcs and furniture, so convert() refuses rather than building a
+plausible-looking wrong apartment. Multi-page PDFs use page 1 only, rendered at --dpi
+(the web upload passes 200). This list is mirrored in web/index.html's upload panel and
+in ALLOWED_SUFFIXES in server.py; keep the three in step.
+
+See the plan for the full pipeline rationale; summary of stages:
 
   load -> downscale to a working width -> grayscale -> Otsu binarize ->
   OPENING by stroke thickness (deletes swing arcs, furniture, text, mullions; keeps
