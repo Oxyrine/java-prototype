@@ -57,6 +57,13 @@ MIN_WALL_STROKE_PX = 4
 # a fitting, and once extruded it is a pillar standing in the room for no reason.
 STUB_METRES = 0.5
 
+# Floor area below which a space behind a door is a cupboard rather than a room, and gets
+# bricked up along with its door. A door you open onto a broom cupboard is indistinguishable
+# from a door you open onto a wall -- both read as a broken room -- and the cupboard is not
+# somewhere anyone was going to stand. Judged in the metres the walkthrough is actually
+# scaled to, so it follows --width-metres; this is a taste threshold, not a derivation.
+MIN_ROOM_AREA_M2 = 1.0
+
 # Processing above this width buys nothing -- walls are already tens of pixels thick --
 # and every stage downstream is O(pixels). Also stabilises the stroke estimate, which
 # would otherwise report wildly different numbers for the same plan at two scan DPIs.
@@ -389,6 +396,32 @@ def keep_largest_wall_component(wall_mask: np.ndarray) -> np.ndarray:
 # 4-connected neighbour (the wall picking back up one column over); true noise
 # doesn't. Only prune when there's no such continuation.
 # ---------------------------------------------------------------------------
+
+def brick_up_cupboards(wall_mask: np.ndarray, door_cells: set, min_area_cells: int):
+    """Fill spaces too small to be rooms, so they stop having doors onto them.
+
+    Blocking the doorways splits the interior back into the rooms the plan actually draws;
+    anything that comes out under min_area_cells is a cupboard, a duct riser or a service
+    void. Nobody was walking into one, but each still had a door on it that looked exactly
+    like a bedroom door, which is the whole reason a wall behind a door read as a broken
+    room. The doors themselves are not touched here -- with the space behind them solid they
+    lead nowhere, and seal_blind_doorways takes them on the next pass.
+    """
+    blocked = wall_mask.copy()
+    for r, c in door_cells:
+        blocked[r, c] = True
+
+    interior = ~blocked & ~outside_mask(wall_mask)
+    labels, sizes = connected_components(interior, connectivity=4)
+    wall_mask = wall_mask.copy()
+    filled = 0
+    for label_id in range(len(sizes)):
+        if sizes[label_id] >= min_area_cells:
+            continue
+        wall_mask[labels == label_id] = True
+        filled += int(sizes[label_id])
+    return wall_mask, filled
+
 
 def _open_runs(open_mask: np.ndarray) -> np.ndarray:
     """For each open cell, the shorter of its horizontal and vertical unbroken open runs.
@@ -1173,6 +1206,11 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     wall_mask, carved_cells = carve_doorways(wall_mask, min_room, max_thickness, door_cells_wide)
     door_cells = detected_door_cells | carved_cells
     window_cells -= carved_cells  # a carve through glass makes it a doorway, not a window
+    # Cupboards first, so the doors that served them read as blind on the next line and get
+    # sealed by the same pass that handles every other door onto nothing.
+    wall_mask, cupboard_cells = brick_up_cupboards(
+        wall_mask, door_cells, max(1, round(MIN_ROOM_AREA_M2 / (cell_size ** 2))))
+
     # Same bar test_convert holds doorways to: the player's own width plus clearance.
     wall_mask, door_cells, blind_cells = seal_blind_doorways(
         wall_mask, door_cells,
@@ -1236,7 +1274,8 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     print(f"Grid: {cols_actual}x{rows_actual}  walls={wall_count}  "
           f"doors={len(door_cells)} (carved {len(carved_cells)})  windows={len(window_cells)}  "
           f"furniture dropped={removed_clutter}  blind door cells sealed={len(blind_cells)}  "
-          f"impassable gaps filled={filled_gaps}  spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
+          f"cupboards bricked={cupboard_cells}  impassable gaps filled={filled_gaps}  "
+          f"spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
     print(f"Wall stroke measured at {stroke_px}px -> opening radius {radius}")
     print(f"cellSize = {width_metres} / {cols_actual} = {cell_size:.4f} m/cell")
     # The single most common way to get a bizarre-looking walkthrough is an honest typo
