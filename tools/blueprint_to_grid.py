@@ -1,4 +1,4 @@
-"""
+﻿"""
 Converts an architectural floor-plan image (PNG/JPG/PDF) into the same 1/0/2 text grid
 format that BlueprintReader.java already reads. See the plan for the full pipeline
 rationale; summary of stages:
@@ -389,6 +389,103 @@ def keep_largest_wall_component(wall_mask: np.ndarray) -> np.ndarray:
 # 4-connected neighbour (the wall picking back up one column over); true noise
 # doesn't. Only prune when there's no such continuation.
 # ---------------------------------------------------------------------------
+
+def _floor_beyond(wall_mask, door_cells, r, c, dr, dc) -> bool:
+    """Step outward from a door cell, straight through any further door cells (a doorway is
+    often two cells thick), and report whether open floor lies on the far side."""
+    rows, cols = wall_mask.shape
+    while True:
+        r, c = r + dr, c + dc
+        if not (0 <= r < rows and 0 <= c < cols):
+            return False
+        if (r, c) in door_cells:
+            continue
+        return not wall_mask[r, c]
+
+
+def seal_blind_doorways(wall_mask: np.ndarray, door_cells: set,
+                         min_door_cells: int = 0, min_room: int = 0):
+    """Fill in doorway cells that don't connect two spaces.
+
+    A door has to lead somewhere. This one didn't: on a real plan the MECH cupboard's
+    interior filled solid (its shelving, its label and its plant all read as ink), and the
+    detected door in front of it was left opening onto a blank wall a few centimetres
+    behind -- "this door just opens and nothing is here".
+
+    Trimmed cell by cell rather than whole-opening-at-a-time, because the same 1.8m gap was
+    part blind and part real: four of its nine cells open into the cupboard and the other
+    five butt against solid wall. Sealing the lot would brick up a real way through; keeping
+    the lot is what put a door in front of a wall.
+
+    The straight-line test is only a nomination. An opening that turns a corner connects its
+    two sides by a bend rather than by a line through any one cell, and trusting the test
+    alone cost 0.2% of interior reachability. So each candidate is sealed tentatively and
+    put back if it was holding a space open -- the same tentative-then-verify the
+    doorway/window classifier uses, for the same reason: no local rule about a single cell
+    can tell you what the floor plan is connected to.
+
+    Measured on the Unit C1 plan: 9 openings -> 5. The three that vanish outright are junk
+    that was never a door -- two 1-cell-wide slots running 3.4m and 1.6m *inside* wall
+    blocks, and one opening onto the void outside the south wall.
+    """
+    wall_mask = wall_mask.copy()
+    _, regions = connected_components(~wall_mask, connectivity=4)
+    baseline = len(regions)
+    blind = set()
+    candidates = sorted(
+        (r, c) for r, c in door_cells
+        if not any(_floor_beyond(wall_mask, door_cells, r, c, dr, dc)
+                   and _floor_beyond(wall_mask, door_cells, r, c, -dr, -dc)
+                   for dr, dc in ((1, 0), (0, 1)))
+    )
+    for r, c in candidates:
+        wall_mask[r, c] = True
+        _, regions = connected_components(~wall_mask, connectivity=4)
+        if len(regions) > baseline:
+            wall_mask[r, c] = False  # it was the only way into somewhere after all
+        else:
+            blind.add((r, c))
+
+    # Trimming exposes what an opening really serves. The MECH door's remainder is 0.30m --
+    # narrower than the player. A space whose only entrance is narrower than the player is
+    # not a room, it is a cupboard, and nobody was ever getting into it: brick it up rather
+    # than leave a door standing in front of it. If what gets stranded is room-sized then
+    # the opening was misread rather than a cupboard, so put it back untouched.
+    remaining = np.zeros_like(wall_mask)
+    for r, c in door_cells - blind:
+        remaining[r, c] = True
+    labels, sizes = connected_components(remaining, connectivity=8)
+    for label_id in range(len(sizes)):
+        rs, cs = np.where(labels == label_id)
+        if max(int(rs.max() - rs.min()), int(cs.max() - cs.min())) + 1 >= min_door_cells:
+            continue
+        cells = list(zip(rs.tolist(), cs.tolist()))
+        for r, c in cells:
+            wall_mask[r, c] = True
+        stranded = _stranded_regions(wall_mask)
+        if stranded is not None and int(stranded.sum()) <= min_room:
+            wall_mask |= stranded
+            blind |= set(cells)
+        else:
+            for r, c in cells:
+                wall_mask[r, c] = False
+
+    return wall_mask, door_cells - blind, blind
+
+
+def _stranded_regions(wall_mask: np.ndarray):
+    """Interior open space that is no longer part of the one connected walkable area.
+
+    Every room reaches every other room through a doorway, so a correct level has exactly
+    one interior region; anything else has been cut off. Returns None when nothing is
+    stranded, so the caller can tell that apart from an empty result.
+    """
+    interior = ~wall_mask & ~outside_mask(wall_mask)
+    labels, sizes = connected_components(interior, connectivity=4)
+    if len(sizes) <= 1:
+        return None
+    return (labels != int(np.argmax(sizes))) & interior
+
 
 def prune_wall_tips(wall_mask: np.ndarray) -> np.ndarray:
     rows, cols = wall_mask.shape
@@ -1008,6 +1105,10 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     wall_mask, carved_cells = carve_doorways(wall_mask, min_room, max_thickness, door_cells_wide)
     door_cells = detected_door_cells | carved_cells
     window_cells -= carved_cells  # a carve through glass makes it a doorway, not a window
+    # Same bar test_convert holds doorways to: the player's own width plus clearance.
+    wall_mask, door_cells, blind_cells = seal_blind_doorways(
+        wall_mask, door_cells,
+        max(3, round((player_radius * 2 + 0.15) / cell_size)), min_room)
 
     # Sanity check, now measured on what carve_doorways had to INVENT rather than on
     # every doorway in the level. Openings detected from the drawing are legitimate and
@@ -1062,7 +1163,8 @@ def convert(image_path: Path, out_name: str, cols, fill: float, width_metres: fl
     wall_count = int(wall_mask.sum())
     print(f"Grid: {cols_actual}x{rows_actual}  walls={wall_count}  "
           f"doors={len(door_cells)} (carved {len(carved_cells)})  windows={len(window_cells)}  "
-          f"furniture dropped={removed_clutter}  spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
+          f"furniture dropped={removed_clutter}  blind door cells sealed={len(blind_cells)}  "
+          f"spawn=row{spawn_rc[0]},col{spawn_rc[1]}")
     print(f"Wall stroke measured at {stroke_px}px -> opening radius {radius}")
     print(f"cellSize = {width_metres} / {cols_actual} = {cell_size:.4f} m/cell")
     # The single most common way to get a bizarre-looking walkthrough is an honest typo
@@ -1124,3 +1226,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
