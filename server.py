@@ -234,4 +234,9 @@ def load_level():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=8000, debug=False)
+    # 0.0.0.0 + $PORT rather than the local-dev 127.0.0.1:8000: Render (and Fly/Railway)
+    # inject PORT at runtime and route traffic to it, and a loopback-only bind would refuse
+    # every request from their proxy. The 8000 fallback keeps `py server.py` unchanged for
+    # local use. threaded=True so a slow /api/convert (it shells out to Maven) doesn't block
+    # the static-file requests every other tab or the page's own asset loads make meanwhile.
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), debug=False, threaded=True)
