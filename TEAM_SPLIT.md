@@ -1,6 +1,6 @@
-# Team split — 3 people, by pipeline stage
+# Team split — 3 people, zero cross-dependency
 
-The project is already three languages doing three sequential jobs:
+The project is three languages doing three sequential jobs:
 
 ```
 floor plan image
@@ -15,10 +15,30 @@ web/level01.json
 browser
 ```
 
-Splitting along those seams means each person's files barely overlap, so there's almost
-nothing to merge-conflict over. The two formats that cross a seam — the text grid and
-`level01.json` — are already fixed and documented in [ARCHITECTURE.md](ARCHITECTURE.md);
-treat them as a contract, not something to redesign mid-project (see "Ground rules" below).
+Splitting along those seams keeps each person's *files* from overlapping. That alone isn't
+enough to make the work independent, though — as originally written, Lane A needed nothing
+from anyone, but Lane C needed a `web/level01.json` that only exists after Lane A's code
+*runs*, and that file is gitignored (it's a build artifact, regenerated on every
+conversion), so a fresh clone doesn't have one. That's a real dependency: Lane C blocked on
+someone else's toolchain being installed and working before touching a single line of
+`main.js`.
+
+**Fixed below**: every lane now has a committed, tracked fixture to build against on day
+one — nobody runs anyone else's code just to get started. The two formats that cross a
+seam (the text grid, `level01.json`) are documented in [ARCHITECTURE.md](ARCHITECTURE.md)
+and frozen — see "Ground rules."
+
+## Day-1 setup — no waiting on anyone
+
+| Lane | Fixture | Command |
+|---|---|---|
+| A (Java) | `blueprints/house.txt`, `level01.txt`, `apartment_demo.txt`, `wikicommons_demo.txt` — four tracked sample grids | none, already in the repo |
+| B (Python) | any real floor-plan image, saved locally as `blueprints/uploaded.jpg` (gitignored — everyone keeps their own, nobody shares/commits one) | — |
+| C (JS/Three.js) | `web/level01.sample.json` — a tracked, pre-built level matching the real schema | `cp web/level01.sample.json web/level01.json` |
+
+Each of these works with **only that lane's own tools installed**. Lane C in particular
+needs no JDK, no Maven, no Python — copy the sample JSON and open `web/index.html` (or
+`py server.py` if you want the upload panel too) and you're rendering a real level.
 
 ## Lane A — Java: grid → level geometry
 
@@ -32,94 +52,99 @@ header. Defined in [ARCHITECTURE.md](ARCHITECTURE.md#stage-2--grid-to-level-json
 spawn, grid, walls, windows). Field names and shapes are load-bearing for Lane C; don't
 rename or restructure without telling them first.
 
-**CLI contract Lane B depends on:**
-`java -cp <classpath> com.blueprint.Main --blueprint=<path> --output=<path> --cellSize=<f> --wallHeight=<f>`
-(invoked by `tools/build_level.py`'s `run_java()`, never `mvn exec:java` — see that file's
-comment on why).
-
-**Can be developed and tested with zero Python or JS running** — feed it any of the
-existing sample grids directly:
+**Dependency on anyone else: none.** Four sample grids are already tracked in git —
+develop and test against them directly:
 ```bash
-py tools/build_level.py blueprints/house.txt --out house --width-metres 12
-# or run the Java CLI directly against blueprints/level01.txt / apartment_demo.txt
+py -c "import sys; sys.path.insert(0,'tools'); import build_level; from pathlib import Path; \
+  build_level.run_java(Path('blueprints/house.txt'), Path('web/level01.json'), 0.125, 2.5)"
 ```
-Sanity-check output by eye (JSON) or by loading it in the browser once Lane C's frontend is
-up — you don't need Lane B's converter to have run recently.
+(cellSize/wallHeight for each fixture are in its own `#` header line — read it, don't guess.)
+No Python conversion step involved, no server, no browser needed to sanity-check the JSON
+by eye.
 
 **Real backlog to pick from** (from ARCHITECTURE.md, nothing invented):
 - Room-label plumbing exists (`data.roomLabels = [{name, row, col}]`) but nothing produces
-  it yet — needs an OCR pass, which is explicitly *not* Lane A's job (that's image
-  processing, Lane B's territory) but consuming/matching labels once emitted is.
-- Anything in `computeRooms`-adjacent Java-side logic you want to hand richer data to Lane C
-  through the JSON (e.g. per-room metadata) goes here — extend the schema, tell Lane C.
+  it yet — needs an OCR pass, which is Lane B's territory, but consuming/matching labels
+  once emitted is Lane A's.
+- Anything that hands Lane C richer per-room data through the JSON goes here — extend the
+  schema, then tell Lane C (see Ground rules).
 
 ## Lane B — Python: image → grid, plus the server
 
 **Owns:** `tools/blueprint_to_grid.py`, `tools/build_level.py`, `tools/make_sample_blueprint.py`,
 `tools/test_convert.py`, `server.py`, `requirements.txt`
 
-**Reads:** an uploaded PNG/JPG/PDF floor plan.
+**Reads:** a floor-plan image (PNG/JPG/PDF).
 
 **Produces:** the same text grid format Lane A reads (must stay in sync — see contract
-above), and the HTTP API Lane C's frontend calls:
-- `POST /api/convert` — image in, runs the whole pipeline, returns wall count / reachable
-  fraction / warning
-- `GET /api/levels`, `POST /api/load-level` — saved-grid picker
-- `GET /`, `GET /<file>` — static file serving for `web/`
+above), and the HTTP API Lane C's frontend calls (`POST /api/convert`, `GET /api/levels`,
+`POST /api/load-level`, static file serving for `web/`).
 
-**Three-way contract to keep in sync** (already called out in ARCHITECTURE.md — it's not
-new, just don't let it drift): accepted file types (`.png/.jpg/.jpeg/.pdf`) are stated in
-`ALLOWED_SUFFIXES` in `server.py`, the `accept` attribute + hint text in `web/index.html`,
-and the docstring in `blueprint_to_grid.py`. If Lane B changes what's accepted, Lane C's
-upload form text has to change too — flag it, don't just push it.
+**Three-way contract to keep in sync** (already true today, just don't let it drift):
+accepted file types (`.png/.jpg/.jpeg/.pdf`) are stated in `ALLOWED_SUFFIXES` in
+`server.py`, the `accept` attribute + hint text in `web/index.html`, and the docstring in
+`blueprint_to_grid.py`. Change what's accepted, flag it to Lane C — their upload-form copy
+has to match.
 
-**Can be developed and tested independently:** `py tools/test_convert.py` self-checks the
-converter against a fixture image with no Java or JS involved. `blueprint_to_grid.convert()`
-can be called standalone to produce a `.txt` + `.overlay.png` for visual inspection.
+**Dependency on anyone else: none, but you need your own test image.**
+`tools/test_convert.py` is hardcoded to `blueprints/uploaded.jpg`, which is gitignored (a
+real plan can be private, so it's never committed) — meaning **everyone needs their own
+copy**, not a shared one. Grab any real floor plan photo/scan/export, save it as
+`blueprints/uploaded.jpg` locally, then:
+```bash
+py tools/test_convert.py
+```
+runs entirely inside Lane B's own files — no Java, no server, no browser. If you'd rather
+not hunt down a real plan, `py tools/make_sample_blueprint.py` generates a synthetic one at
+`blueprints/sample_plan.png`, but it has no window symbols, so the full `demo()` assertions
+(which require `window_count > 0`) won't pass against it as-is — fine for poking at
+`blueprint_to_grid.convert()` directly, not a substitute for the real self-check.
 
 **Real backlog to pick from:**
-- Deployment: ARCHITECTURE.md has a whole "not yet done" list under Deployment — a
-  `Dockerfile` (JDK 17 + Maven + Python), a `.dockerignore`, testing the Render build. This
-  is squarely Lane B's (it's server/environment, not rendering or level geometry).
-  server.py already binds `0.0.0.0` + `$PORT` for this.
-- OCR for room labels (feeds Lane A's `roomLabels` field, see above) if the group wants
-  that feature — entirely new territory, doesn't touch anyone else's files.
+- Deployment: ARCHITECTURE.md's "not yet done" list under Deployment — a `Dockerfile`
+  (JDK 17 + Maven + Python), a `.dockerignore`, a test Render build. `server.py` already
+  binds `0.0.0.0` + `$PORT` for this.
+- OCR for room labels (feeds Lane A's `roomLabels` field above), if the group wants it —
+  new territory, touches nobody else's files to build.
 
 ## Lane C — Three.js: rendering, movement, UI
 
 **Owns:** `web/main.js`, `web/style.css`, `web/index.html`
 
-**Reads:** `web/level01.json` (Lane A's output) directly via `fetch()`; calls Lane B's
-`/api/*` endpoints for the upload panel and saved-level picker.
+**Reads:** `web/level01.json` via `fetch()`; calls Lane B's `/api/*` endpoints only for the
+upload panel and saved-level picker — everything else (rendering, movement, collision,
+doors, HUD, minimap) runs against whatever's in `level01.json`, full stop.
 
-**Can be developed independently:** `web/level01.json` is already checked out on disk and
-regenerable from any sample grid via `py tools/build_level.py` without touching the
-converter or the server — Lane C doesn't need Lane A or B running to iterate on rendering,
-movement, doors, HUD, or the minimap against a fixed level. Only the upload flow itself
-needs Flask up.
+**Dependency on anyone else: none.** `web/level01.sample.json` is a tracked fixture (a real
+generated level, not hand-faked — same schema Lane A actually emits):
+```bash
+cp web/level01.sample.json web/level01.json
+py -m http.server 8000 --directory web   # or: py server.py, for the upload panel too
+```
+No JDK, no Maven, no Python conversion needed to work on anything client-side. Only the
+upload-and-convert flow itself needs Flask (`py server.py`) running.
 
-**Real backlog to pick from:** whatever's next on rendering/UX/gameplay feel — this is the
-lane most people picture when they think "the game," so it's reasonable for it to carry the
-most visible feature work (HUD, minimap, doors, materials, atmosphere are all already here
-and can keep growing).
+**Real backlog to pick from:** whatever's next on rendering/UX/gameplay feel — HUD,
+minimap, doors, materials, atmosphere are all already in and can keep growing.
 
-## Ground rules for staying out of each other's way
+## Ground rules for staying independent
 
-1. **The two cross-lane formats (text grid, `level01.json`) are frozen.** If a lane needs to
-   change one — new grid character, new JSON field — say so before writing code, not after.
-   Everyone else only has to react to a documented format change, never guess at one.
-2. **File ownership avoids merge conflicts almost entirely**, but `README.md` and
-   `ARCHITECTURE.md` are shared — whoever touches a stage updates that stage's section, and
-   whoever's change is smaller yields on conflicts.
-3. **Integration checkpoint before merging to `main`**: run
-   `py tools/test_convert.py` (Lane B's self-check) and then actually load the page and walk
-   around (`py server.py`, http://localhost:8000) before merging. A lane can be individually
-   "done" and still break the walkthrough if a contract slipped — this catches that instead
-   of finding out at demo time.
-4. **Commit under your own name.** This repo currently has one git author. Once three
-   people push to it, each person needs their own commits under their own GitHub identity
-   (their own local `git config user.name/email`, not this session's) — that's what makes
-   individual contribution visible for grading, and it's also just correct attribution.
-5. Short-lived branches per person, merged often, beat one long-running branch per lane —
-   less to reconcile at the end, and the file-ownership split means fast-forward merges are
-   the common case, not the exception.
+1. **The two cross-lane formats (text grid, `level01.json`) are frozen.** New grid
+   character, new JSON field — say so before writing the code that produces it, not after.
+   Everyone else only has to react to a documented, announced format change, never guess at
+   one or wait on it.
+2. **Fixtures are committed, not personal.** `blueprints/{house,level01,apartment_demo,
+   wikicommons_demo}.txt` and `web/level01.sample.json` are checked into git specifically so
+   nobody needs another lane's toolchain running to develop against real-shaped data. If you
+   add a new fixture, commit it the same way.
+3. `README.md` / `ARCHITECTURE.md` are the one shared surface — whoever touches a stage
+   updates that stage's section; smaller diff yields on conflicts.
+4. **Integration checkpoint before merging to `main`**: run `py tools/test_convert.py`
+   (Lane B), then actually load the page against a real end-to-end conversion and walk
+   around. A lane can be individually "done" against its fixtures and still break the real
+   walkthrough if a contract slipped silently — this is what catches that before demo day.
+5. **Commit under your own identity.** Each person's own local `git config
+   user.name`/`user.email` (not this session's) — that's what makes individual contribution
+   visible for grading.
+6. Short-lived branches per person, merged often. The fixture-based independence above means
+   fast-forward merges should be the common case, not three-way conflicts.
